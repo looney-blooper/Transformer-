@@ -19,7 +19,7 @@ namespace layers {
         //forward pass : Y = WX + b
         void forward(Tensor* X, Tensor* Y);
 
-
-        //lets add backprop next
+        //backward pass : 
+        void backward(Tensor* dY, Tensor* dX);
     };
 }
