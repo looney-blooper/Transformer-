@@ -9,4 +9,7 @@ namespace ops {
 
     // Matrix Multiplication: C = A * B
     void matmul(Tensor* A, Tensor* B, Tensor* C, bool transA = false, bool transB = false);
+
+    // In-place Tensor Addition: A = A + B
+    void add_tensors(Tensor* A, Tensor* B);
 }

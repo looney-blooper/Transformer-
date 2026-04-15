@@ -1,6 +1,16 @@
 #include "ops.cuh"
 #include <iostream>
 
+// --------------------------------------------------------
+// ADD TENSORS KERNEL
+// --------------------------------------------------------
+__global__ void add_tensors_kernel(float* A, float* B, int total_elements) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < total_elements) {
+        A[idx] += B[idx]; // In-place addition
+    }
+}
+
 namespace ops {
     cublasHandle_t handle;
 
@@ -50,5 +60,18 @@ namespace ops {
                     A->d_data, lda, 
                     &beta, 
                     C->d_data, ldc);
+    }
+
+
+    void add_tensors(Tensor* A, Tensor* B) {
+        if (A->size != B->size) {
+            std::cerr << "Error: Tensor sizes must match for addition!" << std::endl;
+            exit(EXIT_FAILURE);
+        }
+
+        int threads_per_block = 256;
+        int blocks = (A->size + threads_per_block - 1) / threads_per_block;
+
+        add_tensors_kernel<<<blocks, threads_per_block>>>(A->d_data, B->d_data, A->size);
     }
 }
