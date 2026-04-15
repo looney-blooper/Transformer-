@@ -22,4 +22,22 @@ namespace layers {
         //backward pass : 
         void backward(Tensor* dY, Tensor* dX);
     };
+
+    class LayerNorm {
+    public:
+        int d_model;
+        float eps;
+        
+        Tensor* gamma;
+        Tensor* beta;
+        
+
+        LayerNorm(int d_model, float eps = 1e-5f);
+
+        ~LayerNorm();
+
+        void forward(Tensor* X, Tensor* Y);
+
+        void Backward(Tensor* dY, Tensor* dX);
+    };
 }

@@ -38,6 +38,41 @@ __global__ void backward_bias_kernel(float* dY, float* db, int batch_size, int o
     }
 }
 
+// --------------------------------------------------------
+// LAYER NORM KERNEL
+// --------------------------------------------------------
+__global__ void layernorm_kernel(float* X, float* Y, float* gamma, float* beta, int d_model, float eps, int total_tokens) {
+    // Each thread handles ONE token (one row of length d_model)
+    int row = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (row < total_tokens) {
+        int offset = row * d_model;
+
+        // Step 1: Calculate Mean
+        float sum = 0.0f;
+        for (int i = 0; i < d_model; i++) {
+            sum += X[offset + i];
+        }
+        float mean = sum / d_model;
+
+        // Step 2: Calculate Variance
+        float var_sum = 0.0f;
+        for (int i = 0; i < d_model; i++) {
+            float diff = X[offset + i] - mean;
+            var_sum += diff * diff;
+        }
+        float variance = var_sum / d_model;
+
+        // Step 3: Normalize and apply Gamma/Beta
+        float inv_std = rsqrtf(variance + eps); // rsqrtf is a fast inverse square root in CUDA
+        
+        for (int i = 0; i < d_model; i++) {
+            float normalized = (X[offset + i] - mean) * inv_std;
+            Y[offset + i] = normalized * gamma[i] + beta[i];
+        }
+    }
+}
+
 namespace layers {
 
     // --------------------------------------------------------
@@ -135,5 +170,55 @@ namespace layers {
             std::cerr << "Backward Bias Kernel Failed: " << cudaGetErrorString(err) << std::endl;
             exit(EXIT_FAILURE);
         }
+    }
+
+
+    LayerNorm::LayerNorm(int d_model, float eps) {
+        this->d_model = d_model;
+        this->eps = eps;
+
+        gamma = new Tensor({1, d_model});
+        beta = new Tensor({1, d_model});
+
+        // Initialize gamma to 1.0 and beta to 0.0
+        // (We would normally do this in a proper initialization function, 
+        // but for safety, let's force the memory on the CPU and copy it over)
+        for(int i = 0; i < d_model; i++) {
+            gamma->h_data[i] = 1.0f;
+            beta->h_data[i] = 0.0f;
+        }
+        gamma->to_device();
+        beta->to_device();
+    }
+
+    LayerNorm::~LayerNorm(){
+        delete gamma;
+        delete beta;
+    }
+
+    void LayerNorm::forward(Tensor* X, Tensor* Y){
+        int total_tokens = X->size / d_model;
+
+        int threads_per_block = 256;
+        int blocks = (total_tokens + threads_per_block - 1)/ threads_per_block;
+
+        layernorm_kernel<<<blocks, threads_per_block>>>(
+            X->d_data, 
+            Y->d_data, 
+            gamma->d_data, 
+            beta->d_data, 
+            d_model, 
+            eps, 
+            total_tokens
+        );
+
+        cudaError_t err = cudaGetLastError();
+        if (err != cudaSuccess) {
+            std::cerr << "LayerNorm Kernel Failed: " << cudaGetErrorString(err) << std::endl;
+            exit(EXIT_FAILURE);
+        }
+
+
+
     }
 }

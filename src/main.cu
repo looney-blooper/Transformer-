@@ -1,54 +1,49 @@
 #include <iostream>
-#include <iomanip> // For clean matrix formatting
+#include <iomanip>
 #include "core/tensor.cuh"
-#include "core/ops.cuh"
-#include "layers/attention.cuh"
+#include "layers/modules.cuh"
 
 int main() {
-    ops::init_cublas();
-
-    // Use tiny dimensions so we can visually read the matrix
     int batch_size = 1;
-    int max_seq_len = 4; // A simple 4-token sequence
-    int d_model = 8;
-    int num_heads = 2;
+    int seq_len = 2; // Testing 2 separate tokens
+    int d_model = 4; // 4 dimensions per token
 
-    std::cout << "Allocating Memory for 4x4 Test..." << std::endl;
-    layers::MultiHeadAttention mha(d_model, num_heads, max_seq_len, batch_size);
+    std::cout << "Allocating Memory for LayerNorm Test..." << std::endl;
+    layers::LayerNorm layernorm(d_model);
     
-    // Dummy input tensor
-    Tensor X({batch_size, max_seq_len, d_model});
+    // Create Input and Output Tensors
+    Tensor X({batch_size, seq_len, d_model});
+    Tensor Y({batch_size, seq_len, d_model});
 
-    // Fill X with random dummy values so the Softmax has actual varying numbers to calculate
-    for(int i = 0; i < X.size; i++) {
-        X.h_data[i] = (float)(rand() % 100) / 100.0f; 
-    }
-    X.to_device(); // Push the dummy data to the GPU
-
-    std::cout << "Running Forward Pass (up to Softmax)..." << std::endl;
+    // Manually load specific values into the Host (CPU) memory
+    // Token 1: [1.0, 2.0, 3.0, 4.0]
+    X.h_data[0] = 1.0f; X.h_data[1] = 2.0f; X.h_data[2] = 3.0f; X.h_data[3] = 4.0f;
     
-    // We pass nullptr for Y because we haven't written the final output projection yet
-    mha.forward(&X, nullptr); 
+    // Token 2: [10.0, 10.0, 10.0, 10.0]
+    X.h_data[4] = 10.0f; X.h_data[5] = 10.0f; X.h_data[6] = 10.0f; X.h_data[7] = 10.0f;
+
+    // Push the manually created data to the GPU
+    X.to_device(); 
+
+    std::cout << "Running LayerNorm Forward Pass..." << std::endl;
+    layernorm.forward(&X, &Y);
     cudaDeviceSynchronize();
 
-    std::cout << "Pulling Attention Matrix back to CPU..." << std::endl;
-    // CRITICAL: Pull the GPU data back to Host memory
-    mha.Attention_Scores->to_host();
+    std::cout << "Pulling Normalized Data back to CPU...\n" << std::endl;
+    Y.to_host();
 
-    std::cout << "\n=== CAUSAL ATTENTION MATRIX (4x4) ===" << std::endl;
-    float* scores = mha.Attention_Scores->h_data;
+    std::cout << "=== NORMALIZED OUTPUT ===" << std::endl;
+    float* out = Y.h_data;
     
-    // Print the matrix row by row
-    for (int row = 0; row < max_seq_len; row++) {
-        for (int col = 0; col < max_seq_len; col++) {
-            // Flattened index calculation
-            int idx = row * max_seq_len + col;
-            std::cout << std::fixed << std::setprecision(4) << scores[idx] << "   ";
+    for (int token = 0; token < seq_len; token++) {
+        std::cout << "Token " << token + 1 << ": [ ";
+        for (int dim = 0; dim < d_model; dim++) {
+            int idx = token * d_model + dim;
+            std::cout << std::fixed << std::setprecision(4) << out[idx] << "   ";
         }
-        std::cout << std::endl; // New line for the next row
+        std::cout << "]" << std::endl;
     }
-    std::cout << "=====================================\n" << std::endl;
+    std::cout << "=========================\n" << std::endl;
 
-    ops::destroy_cublas();
     return 0;
 }

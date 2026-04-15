@@ -166,10 +166,16 @@ namespace layers {
             exit(EXIT_FAILURE);
         }
 
-        // Step 5: Multiply by V (Attention_Scores * V)
-        // We will write this next!
+        // Step 5: Multiply by V (Context = Attention_Scores * V)
+        // Attention_Scores is [seq_len, seq_len], V is [seq_len, d_model]
+        // Result Context is [seq_len, d_model]
+        ops::matmul(Attention_Scores, V, Context);
         
-        // Step 6: Final output projection (Context * W_o)
-    
+        // Step 6: Final output projection (Y = Context * W_o)
+        // Context is [seq_len, d_model], W_o is [d_model, d_model]
+        // Result Y is [seq_len, d_model]
+        if (Y != nullptr) {
+            W_o->forward(Context, Y);
+        }
     }
 }
