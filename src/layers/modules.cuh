@@ -27,7 +27,7 @@ namespace layers {
     public:
         int d_model;
         float eps;
-        
+
         Tensor* gamma;
         Tensor* beta;
         
@@ -39,5 +39,30 @@ namespace layers {
         void forward(Tensor* X, Tensor* Y);
 
         void Backward(Tensor* dY, Tensor* dX);
+    };
+
+
+    class GELU {
+    public:
+        GELU() = default;
+        ~GELU() = default;
+
+        void forward(Tensor* X, Tensor* Y);
+    };
+
+
+    class FeedForward {
+    public:
+        Linear* w1;
+        Linear* w2;
+        GELU* activation;
+        Tensor* hidden_cache;
+
+        FeedForward(int d_model, int d_ff, int max_seq_len, int batch_size);
+
+        ~FeedForward();
+
+        void forward(Tensor* X, Tensor* Y);
+
     };
 }

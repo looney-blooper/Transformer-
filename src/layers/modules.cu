@@ -7,14 +7,9 @@
 // --------------------------------------------------------
 // This function runs on the GPU. Every thread calculates its own global index
 // and adds the correct bias value to the output matrix Y.
-__global__ void add_bias_kernel(float* Y, float* b, int batch_size, int out_features) {
-    // Calculate which thread this is
+__global__ void add_bias_kernel(float* Y, float* b, int total_elements, int out_features) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int total_elements = batch_size * out_features;
-
-    // Ensure we don't read out of bounds
     if (idx < total_elements) {
-        // Find which column this thread is in to apply the correct bias
         int col = idx % out_features; 
         Y[idx] += b[col];
     }
@@ -25,16 +20,14 @@ __global__ void add_bias_kernel(float* Y, float* b, int batch_size, int out_feat
 // --------------------------------------------------------
 // One thread per output feature. Each thread loops down the batch column
 // and sums the gradients to calculate exactly how the bias should update.
-__global__ void backward_bias_kernel(float* dY, float* db, int batch_size, int out_features) {
+__global__ void backward_bias_kernel(float* dY, float* db, int rows, int out_features) {
     int col = blockIdx.x * blockDim.x + threadIdx.x;
-    
     if (col < out_features) {
         float sum = 0.0f;
-        for (int row = 0; row < batch_size; row++) {
-            // Flattened 2D array indexing: [row][col] -> row * width + col
+        for (int row = 0; row < rows; row++) {
             sum += dY[row * out_features + col];
         }
-        db[col] = sum; // Write to the gradient memory
+        db[col] = sum; 
     }
 }
 
@@ -73,6 +66,25 @@ __global__ void layernorm_kernel(float* X, float* Y, float* gamma, float* beta, 
     }
 }
 
+// --------------------------------------------------------
+// GELU KERNEL
+// --------------------------------------------------------
+__global__ void gelu_kernel(float* X, float* Y, int total_elements){
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (idx < total_elements) {
+        float x = X[idx];
+        // The GPT GELU approximation math
+        // sqrt(2/pi) is approximately 0.7978845608
+        float cube = x * x * x;
+        float inner = 0.7978845608f * (x + 0.044715f * cube);
+        float tanh_val = tanhf(inner); // tanhf is the CUDA built-in fast tanh
+        
+        Y[idx] = 0.5f * x * (1.0f + tanh_val);
+    }
+}
+
+
 namespace layers {
 
     // --------------------------------------------------------
@@ -110,15 +122,14 @@ namespace layers {
         ops::matmul(X, W, Y);
 
         // Step B: Launch the custom CUDA kernel to add the bias (Y = Y + b)
-        int batch_size = X->shape[0];
-        int total_elements = batch_size * out_features;
+        int total_elements = Y->size;
         
         // CUDA configuration: 256 threads per block, calculate how many blocks we need
         int threads_per_block = 256;
         int blocks = (total_elements + threads_per_block - 1) / threads_per_block;
 
         // Launch the kernel on the GPU
-        add_bias_kernel<<<blocks, threads_per_block>>>(Y->d_data, b->d_data, batch_size, out_features);
+        add_bias_kernel<<<blocks, threads_per_block>>>(Y->d_data, b->d_data, total_elements, out_features);
         
         // Catch any kernel launch errors
         cudaError_t err = cudaGetLastError();
@@ -159,10 +170,11 @@ namespace layers {
         }
 
         // 3. Calculate Gradient for Bias (db = sum(dY, axis=0))
+        int rows = dY->size / out_features;
         int threads_per_block = 256;
         int blocks = (out_features + threads_per_block - 1) / threads_per_block;
         
-        backward_bias_kernel<<<blocks, threads_per_block>>>(dY->d_data, b->d_grad, batch_size, out_features);
+        backward_bias_kernel<<<blocks, threads_per_block>>>(dY->d_data, b->d_grad, rows, out_features);
         
         // Check for kernel launch errors
         cudaError_t err = cudaGetLastError();
@@ -217,8 +229,49 @@ namespace layers {
             std::cerr << "LayerNorm Kernel Failed: " << cudaGetErrorString(err) << std::endl;
             exit(EXIT_FAILURE);
         }
+    }
 
+    //GELU Activation
+    void GELU::forward(Tensor* X, Tensor* Y){
+        int total_elements = X->size;
+        int threads_per_block = 256;
+        int blocks = (total_elements + threads_per_block - 1)/ threads_per_block;
 
+        gelu_kernel<<<blocks, threads_per_block>>>(X->d_data, Y->d_data, total_elements);
 
+        cudaError_t err = cudaGetLastError();
+        if (err != cudaSuccess) {
+            std::cerr << "GELU Kernel Failed: " << cudaGetErrorString(err) << std::endl;
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    ///FEED FORWARD NEURAL NETWORK
+    FeedForward::FeedForward(int d_model, int d_ff, int max_seq_len, int batch_size){
+        w1 = new Linear(d_model, d_ff);
+        w2 = new Linear(d_ff, d_model);
+
+        activation = new GELU();
+
+        std::vector<int> hidden_shape = {batch_size, max_seq_len, d_ff};
+        hidden_cache = new Tensor(hidden_shape);
+    }
+
+    FeedForward::~FeedForward(){
+        delete w1;
+        delete w2;
+        delete activation;
+        delete hidden_cache;
+    }
+
+    void FeedForward::forward(Tensor* X, Tensor* Y){
+        // Step 1: Linear projection to hidden dimension (X * w1) -> hidden_cache
+        w1->forward(X, hidden_cache);
+
+        // Step 2: Appling activation in place activation(hidden_cache) -> hidden_cache
+        activation->forward(hidden_cache, hidden_cache);
+
+        // Step 3: Linear projection back to original dimension (hidden_cache * w2) -> Y
+        w2->forward(hidden_cache, Y);
     }
 }

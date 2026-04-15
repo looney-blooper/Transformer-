@@ -18,23 +18,30 @@ namespace ops {
 
     void matmul(Tensor* A, Tensor* B, Tensor* C, bool transA, bool transB) {
         float alpha = 1.0f;
-        float beta = 0.0f; // 0.0 ensures we overwrite C completely
+        float beta = 0.0f;
 
-        // The Row-Major Trick: We swap A and B, and their dimensions
-        int m = C->shape[1]; // Columns of C
-        int n = C->shape[0]; // Rows of C
-        int k = transA ? A->shape[0] : A->shape[1]; // The shared inner dimension
+        // Make it dimension-agnostic (treats [1, 128, 64] identical to [128, 64])
+        int A_cols = A->shape.back();
+        int A_rows = A->size / A_cols;
+        
+        int B_cols = B->shape.back();
+        int B_rows = B->size / B_cols;
+
+        int C_cols = C->shape.back();
+        int C_rows = C->size / C_cols;
+
+        // The Row-Major Trick
+        int m = C_cols;
+        int n = C_rows;
+        int k = transA ? A_rows : A_cols;
 
         cublasOperation_t cuTransA = transA ? CUBLAS_OP_T : CUBLAS_OP_N;
         cublasOperation_t cuTransB = transB ? CUBLAS_OP_T : CUBLAS_OP_N;
 
-        // Leading dimensions for memory strides
         int lda = transA ? n : k;
         int ldb = transB ? k : m;
         int ldc = m;
 
-        // Execute optimized GEMM (General Matrix Multiply) on the GPU
-        // Note: we pass B first, then A.
         cublasSgemm(handle, 
                     cuTransB, cuTransA, 
                     m, n, k, 
