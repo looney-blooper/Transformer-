@@ -1,44 +1,54 @@
 #include <iostream>
+#include <iomanip> // For clean matrix formatting
 #include "core/tensor.cuh"
 #include "core/ops.cuh"
 #include "layers/attention.cuh"
 
 int main() {
-    std::cout << "Initializing cuBLAS..." << std::endl;
     ops::init_cublas();
 
-    // The hyperparameters we locked in
-    int batch_size = 2;
-    int max_seq_len = 128;
-    int d_model = 64;
+    // Use tiny dimensions so we can visually read the matrix
+    int batch_size = 1;
+    int max_seq_len = 4; // A simple 4-token sequence
+    int d_model = 8;
     int num_heads = 2;
 
-    std::cout << "\nAllocating Attention Memory on RTX 3050..." << std::endl;
-    
-    // Create the Attention block
+    std::cout << "Allocating Memory for 4x4 Test..." << std::endl;
     layers::MultiHeadAttention mha(d_model, num_heads, max_seq_len, batch_size);
-
-    std::cout << "Multi-Head Attention instantiated successfully!" << std::endl;
-    std::cout << "- Q, K, V buffers allocated." << std::endl;
-    std::cout << "- Attention Scores buffer allocated: " << mha.Attention_Scores->size << " elements." << std::endl;
     
-    // Create a dummy input tensor and test a partial forward pass
-    Tensor X({batch_size, d_model});
-    Tensor Y({batch_size, d_model});
+    // Dummy input tensor
+    Tensor X({batch_size, max_seq_len, d_model});
 
-    std::cout << "\nTesting Q, K, V Projections (Forward Pass Step 1)..." << std::endl;
-    // We only call the projection layers since the Softmax isn't written yet
-    mha.W_q->forward(&X, mha.Q);
-    mha.W_k->forward(&X, mha.K);
-    mha.W_v->forward(&X, mha.V);
+    // Fill X with random dummy values so the Softmax has actual varying numbers to calculate
+    for(int i = 0; i < X.size; i++) {
+        X.h_data[i] = (float)(rand() % 100) / 100.0f; 
+    }
+    X.to_device(); // Push the dummy data to the GPU
 
+    std::cout << "Running Forward Pass (up to Softmax)..." << std::endl;
+    
+    // We pass nullptr for Y because we haven't written the final output projection yet
+    mha.forward(&X, nullptr); 
     cudaDeviceSynchronize();
-    std::cout << "Projections completed without VRAM faults!" << std::endl;
 
-    std::cout << "\nCleaning up VRAM..." << std::endl;
-    ops::destroy_cublas();
-    // Destructors will automatically fire here and free everything.
+    std::cout << "Pulling Attention Matrix back to CPU..." << std::endl;
+    // CRITICAL: Pull the GPU data back to Host memory
+    mha.Attention_Scores->to_host();
+
+    std::cout << "\n=== CAUSAL ATTENTION MATRIX (4x4) ===" << std::endl;
+    float* scores = mha.Attention_Scores->h_data;
     
-    std::cout << "Environment clean. Ready for Softmax." << std::endl;
+    // Print the matrix row by row
+    for (int row = 0; row < max_seq_len; row++) {
+        for (int col = 0; col < max_seq_len; col++) {
+            // Flattened index calculation
+            int idx = row * max_seq_len + col;
+            std::cout << std::fixed << std::setprecision(4) << scores[idx] << "   ";
+        }
+        std::cout << std::endl; // New line for the next row
+    }
+    std::cout << "=====================================\n" << std::endl;
+
+    ops::destroy_cublas();
     return 0;
 }
