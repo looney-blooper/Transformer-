@@ -65,4 +65,34 @@ namespace layers {
         void forward(Tensor* X, Tensor* Y);
 
     };
+
+
+    class Embedding {
+    public:
+        int vocab_size;
+        int d_model;
+
+        Tensor* weight; // Positional Encoding matrix // Shape: [vocab_size, d_model]
+
+        Embedding(int vocab_size, int d_model);
+
+        ~Embedding();
+
+        // X is an array of integer Token IDs. Y is the output float Tensor.
+        void forward(int* X_ids, Tensor* Y, int total_tokens);
+    };
+
+
+    class PositionalEncoding {
+    public:
+        int max_seq_len;
+        int d_model;
+        Tensor* pe_matrix; // Fixed matrix of shape [max_seq_len, d_model]
+
+        PositionalEncoding(int max_seq_len, int d_model);
+        ~PositionalEncoding();
+
+        // Adds the positional encodings IN-PLACE to the embedded tensor X
+        void forward(Tensor* X);
+    };
 }

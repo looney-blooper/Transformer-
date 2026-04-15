@@ -84,6 +84,44 @@ __global__ void gelu_kernel(float* X, float* Y, int total_elements){
     }
 }
 
+// --------------------------------------------------------
+// EMBEDDING LOOKUP KERNEL
+// --------------------------------------------------------
+__global__ void embedding_forward_kernel(int* input_ids, float* weights, float* output, int d_model, int total_tokens) {
+    int token_idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (token_idx < total_tokens) {
+        int vocab_id = input_ids[token_idx];
+        
+        // Calculate memory offsets
+        int weight_offset = vocab_id * d_model;
+        int output_offset = token_idx * d_model;
+
+        // Copy the specific row from the weight matrix into the sequence
+        for (int i = 0; i < d_model; i++) {
+            output[output_offset + i] = weights[weight_offset + i];
+        }
+    }
+}
+
+// --------------------------------------------------------
+// ADD POSITIONAL ENCODING KERNEL
+// --------------------------------------------------------
+__global__ void add_pe_kernel(float* X, float* PE, int seq_len, int d_model, int batch_size) {
+    // Each thread handles one token's entire embedding vector
+    int b = blockIdx.y; 
+    int pos = blockIdx.x * blockDim.x + threadIdx.x; 
+
+    if (b < batch_size && pos < seq_len) {
+        int x_offset = (b * seq_len * d_model) + (pos * d_model);
+        int pe_offset = pos * d_model; // PE is identical for every sequence in the batch
+
+        for (int i = 0; i < d_model; i++) {
+            X[x_offset + i] += PE[pe_offset + i]; // In-place addition
+        }
+    }
+}
+
 
 namespace layers {
 
@@ -273,5 +311,76 @@ namespace layers {
 
         // Step 3: Linear projection back to original dimension (hidden_cache * w2) -> Y
         w2->forward(hidden_cache, Y);
+    }
+
+
+    // --------------------------------------------------------
+    // EMBEDDING IMPLEMENTATION
+    // --------------------------------------------------------
+    Embedding::Embedding(int vocab_size, int d_model) {
+        this->vocab_size = vocab_size;
+        this->d_model = d_model;
+        weight = new Tensor({vocab_size, d_model});
+        
+        // TODO: In a real model, we initialize this with random normal distribution
+    }
+
+    Embedding::~Embedding() {
+        delete weight;
+    }
+
+    void Embedding::forward(int* X_ids, Tensor* Y, int total_tokens) {
+        int threads_per_block = 256;
+        int blocks = (total_tokens + threads_per_block - 1) / threads_per_block;
+
+        embedding_forward_kernel<<<blocks, threads_per_block>>>(
+            X_ids, weight->d_data, Y->d_data, d_model, total_tokens
+        );
+    }
+
+    // --------------------------------------------------------
+    // POSITIONAL ENCODING IMPLEMENTATION
+    // --------------------------------------------------------
+    PositionalEncoding::PositionalEncoding(int max_seq_len, int d_model) {
+        this->max_seq_len = max_seq_len;
+        this->d_model = d_model;
+        pe_matrix = new Tensor({max_seq_len, d_model}, false); // requires_grad = false!
+
+        // Generate the sine/cosine grid on the CPU
+        for (int pos = 0; pos < max_seq_len; pos++) {
+            for (int i = 0; i < d_model; i += 2) {
+                // Calculate the frequency denominator
+                float div_term = powf(10000.0f, (float)i / (float)d_model);
+                
+                // Even dimensions get Sine
+                pe_matrix->h_data[pos * d_model + i] = sinf((float)pos / div_term);
+                
+                // Odd dimensions get Cosine (make sure we don't go out of bounds)
+                if (i + 1 < d_model) {
+                    pe_matrix->h_data[pos * d_model + i + 1] = cosf((float)pos / div_term);
+                }
+            }
+        }
+        
+        // Push the calculated grid to the GPU VRAM
+        pe_matrix->to_device(); 
+    }
+
+    PositionalEncoding::~PositionalEncoding() {
+        delete pe_matrix;
+    }
+
+    void PositionalEncoding::forward(Tensor* X) {
+        int batch_size = X->shape[0];
+        int seq_len = X->shape[1];
+
+        int threads_per_block = 128;
+        int blocks_x = (seq_len + threads_per_block - 1) / threads_per_block;
+        int blocks_y = batch_size;
+
+        dim3 grid(blocks_x, blocks_y);
+        dim3 block(threads_per_block);
+
+        add_pe_kernel<<<grid, block>>>(X->d_data, pe_matrix->d_data, seq_len, d_model, batch_size);
     }
 }
