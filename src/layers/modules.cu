@@ -155,6 +155,28 @@ __global__ void embedding_forward_kernel(int* input_ids, float* weights, float* 
 }
 
 // --------------------------------------------------------
+// EMBEDDING BACKWARD KERNEL
+// --------------------------------------------------------
+__global__ void embedding_backward_kernel(float* dY, float* dWeight, int* input_ids, int d_model, int total_tokens) {
+    // Each thread handles exactly ONE token in the sequence
+    int token_idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (token_idx < total_tokens) {
+        int vocab_id = input_ids[token_idx];
+        
+        // Calculate memory offsets
+        int weight_offset = vocab_id * d_model;
+        int dy_offset = token_idx * d_model;
+
+        // Safely accumulate the gradients into the specific vocabulary row
+        for (int i = 0; i < d_model; i++) {
+            // atomicAdd guarantees no memory collisions if multiple tokens have the same vocab_id!
+            atomicAdd(&dWeight[weight_offset + i], dY[dy_offset + i]);
+        }
+    }
+}
+
+// --------------------------------------------------------
 // ADD POSITIONAL ENCODING KERNEL
 // --------------------------------------------------------
 __global__ void add_pe_kernel(float* X, float* PE, int seq_len, int d_model, int batch_size) {
@@ -415,19 +437,38 @@ namespace layers {
         this->d_model = d_model;
         weight = new Tensor({vocab_size, d_model});
         
+        dWeight = new Tensor({vocab_size, d_model});
+        ids_cache = nullptr;
         // TODO: In a real model, we initialize this with random normal distribution
     }
 
     Embedding::~Embedding() {
         delete weight;
+        delete dWeight;
     }
 
     void Embedding::forward(int* X_ids, Tensor* Y, int total_tokens) {
+        ids_cache = X_ids;
+
         int threads_per_block = 256;
         int blocks = (total_tokens + threads_per_block - 1) / threads_per_block;
 
         embedding_forward_kernel<<<blocks, threads_per_block>>>(
             X_ids, weight->d_data, Y->d_data, d_model, total_tokens
+        );
+    }
+
+    void Embedding::backward(Tensor* dY, int total_tokens){
+        // 1. Zero out the old gradients from the previous training step
+        // If we don't do this, gradients will accumulate to infinity!
+        cudaMemset(dWeight->d_data, 0, dWeight->size * sizeof(float));
+
+        // 2. Launch the atomic accumulation kernel
+        int threads_per_block = 256;
+        int blocks = (total_tokens + threads_per_block - 1) / threads_per_block;
+
+        embedding_backward_kernel<<<blocks, threads_per_block>>>(
+            dY->d_data, dWeight->d_data, ids_cache, d_model, total_tokens
         );
     }
 

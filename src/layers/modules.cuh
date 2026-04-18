@@ -82,6 +82,9 @@ namespace layers {
         int d_model;
 
         Tensor* weight; // Positional Encoding matrix // Shape: [vocab_size, d_model]
+        Tensor* dWeight;
+
+        int* ids_cache; // Remembers the input tokens for backprop
 
         Embedding(int vocab_size, int d_model);
 
@@ -89,6 +92,7 @@ namespace layers {
 
         // X is an array of integer Token IDs. Y is the output float Tensor.
         void forward(int* X_ids, Tensor* Y, int total_tokens);
+        void backward(Tensor* dY, int total_tokens);
     };
 
 
