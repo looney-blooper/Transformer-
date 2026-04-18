@@ -67,6 +67,33 @@ __global__ void layernorm_kernel(float* X, float* Y, float* gamma, float* beta, 
 }
 
 // --------------------------------------------------------
+// LAYER NORM BACKWARD KERNEL (Simplified for Beta/Gamma)
+// --------------------------------------------------------
+__global__ void layernorm_backward_kernel(float* dY, float* norm_x, float* dGamma, float* dBeta, int d_model, int total_tokens) {
+    // One thread per dimension of the embedding (d_model)
+    int dim = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (dim < d_model) {
+        float sum_dGamma = 0.0f;
+        float sum_dBeta = 0.0f;
+
+        // Sum gradients down the batch/sequence column
+        for (int row = 0; row < total_tokens; row++) {
+            int idx = row * d_model + dim;
+            float dy = dY[idx];
+            sum_dGamma += dy * norm_x[idx];
+            sum_dBeta += dy;
+        }
+
+        dGamma[dim] = sum_dGamma;
+        dBeta[dim] = sum_dBeta;
+        
+        // NOTE: In a full implementation, we must also calculate dX here using the 
+        // Jacobian of the mean/variance. For immediate stability, we will focus on the weights.
+    }
+}
+
+// --------------------------------------------------------
 // GELU KERNEL
 // --------------------------------------------------------
 __global__ void gelu_kernel(float* X, float* Y, int total_elements){
@@ -81,6 +108,29 @@ __global__ void gelu_kernel(float* X, float* Y, int total_elements){
         float tanh_val = tanhf(inner); // tanhf is the CUDA built-in fast tanh
         
         Y[idx] = 0.5f * x * (1.0f + tanh_val);
+    }
+}
+
+// --------------------------------------------------------
+// GELU BACKWARD KERNEL
+// --------------------------------------------------------
+__global__ void gelu_backward_kernel(float* dY, float* X, float* dX, int total_elements) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    if (idx < total_elements) {
+        float x = X[idx];
+        
+        // The derivative of the GPT GELU approximation
+        float cube = x * x * x;
+        float inner = 0.7978845608f * (x + 0.044715f * cube);
+        float tanh_val = tanhf(inner);
+        
+        float sech2 = 1.0f - tanh_val * tanh_val;
+        float derivative = 0.5f * (1.0f + tanh_val) + 
+                           0.5f * x * sech2 * 0.7978845608f * (1.0f + 3.0f * 0.044715f * x * x);
+        
+        // Chain rule: Multiply incoming gradient (dY) by local derivative
+        dX[idx] = dY[idx] * derivative;
     }
 }
 
@@ -268,13 +318,26 @@ namespace layers {
     }
 
     void LayerNorm::backward(Tensor* dY, Tensor* dX){
+        int total_tokens = dY->size/d_model;
+
+        int threads_per_block = 256;
+        int blocks = (d_model + threads_per_block - 1)/threads_per_block;
+
+        layernorm_backward_kernel<<<blocks, threads_per_block>>>(
+            dY->d_data, normalized_cache->d_data, gamma->d_grad, beta->d_grad, d_model, total_tokens
+        );
         
+        // In a true end-to-end framework, dX would be populated here. 
+        // We will map dX = dY as a simple pass-through for this architectural test.
+        cudaMemcpy(dX->d_data, dY->d_data, dX->size * sizeof(float), cudaMemcpyDeviceToDevice);
     }
 
     // --------------------------------------------------------
     // GELU IMPLEMENTATION
     // --------------------------------------------------------
     void GELU::forward(Tensor* X, Tensor* Y){
+        X_cache = X;
+
         int total_elements = X->size;
         int threads_per_block = 256;
         int blocks = (total_elements + threads_per_block - 1)/ threads_per_block;
@@ -289,7 +352,11 @@ namespace layers {
     }
 
     void GELU::backward(Tensor* dY, Tensor* dX){
+        int total_elements = X_cache->size;
+        int threads_per_block = 256;
+        int blocks = (total_elements + threads_per_block - 1)/ threads_per_block;
 
+        gelu_backward_kernel<<<blocks, threads_per_block>>>(dY->d_data, X_cache->d_data, dX->d_data, total_elements);
     }
 
     // --------------------------------------------------------
@@ -303,6 +370,7 @@ namespace layers {
 
         std::vector<int> hidden_shape = {batch_size, max_seq_len, d_ff};
         hidden_cache = new Tensor(hidden_shape);
+        activated_cache = new Tensor(hidden_shape);
     }
 
     FeedForward::~FeedForward(){
@@ -310,17 +378,32 @@ namespace layers {
         delete w2;
         delete activation;
         delete hidden_cache;
+        delete activated_cache;
     }
 
     void FeedForward::forward(Tensor* X, Tensor* Y){
         // Step 1: Linear projection to hidden dimension (X * w1) -> hidden_cache
         w1->forward(X, hidden_cache);
 
-        // Step 2: Appling activation in place activation(hidden_cache) -> hidden_cache
-        activation->forward(hidden_cache, hidden_cache);
+        activation->forward(hidden_cache, activated_cache);
 
-        // Step 3: Linear projection back to original dimension (hidden_cache * w2) -> Y
-        w2->forward(hidden_cache, Y);
+        // Step 3: Linear projection back to original dimension (activation_cache * w2) -> Y
+        w2->forward(activated_cache, Y);
+    }
+
+    void FeedForward::backward(Tensor* dY, Tensor* dX) {
+        // 1. w2 backward: It uses 'activated_cache' to calculate dW2. 
+        // Then, it writes the gradient (dX2) directly OVER the 'activated_cache' memory!
+        w2->backward(dY, activated_cache);
+
+        // 2. GELU backward: It reads the incoming gradient from 'activated_cache', 
+        // uses 'hidden_cache' to calculate the derivative, and writes the new gradient 
+        // directly OVER the 'hidden_cache' memory!
+        activation->backward(activated_cache, hidden_cache);
+
+        // 3. w1 backward: It reads the gradient from 'hidden_cache', calculates dW1,
+        // and finally writes the ultimate gradient out to dX.
+        w1->backward(hidden_cache, dX);
     }
 
 

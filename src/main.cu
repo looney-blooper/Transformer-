@@ -1,58 +1,53 @@
 #include <iostream>
-#include <iomanip>
 #include "core/tensor.cuh"
-#include "layers/loss.cuh"
+#include "core/ops.cuh"
+#include "layers/modules.cuh"
+
+// Helper to initialize weights safely
+void init_tensor(Tensor* t) {
+    for(int i = 0; i < t->size; i++) {
+        t->h_data[i] = ((float)(rand() % 100) / 100.0f) * 0.1f;
+    }
+    t->to_device();
+}
 
 int main() {
+    ops::init_cublas();
+
     int batch_size = 1;
-    int seq_len = 2; // Testing 2 tokens
-    int vocab_size = 4; // A tiny 4-word vocabulary
+    int max_seq_len = 2;
+    int d_model = 4;
+    int d_ff = 16;
 
-    std::cout << "Allocating Memory for Loss Test..." << std::endl;
-    layers::CrossEntropyLoss criterion;
+    std::cout << "Allocating Memory for FFN Backprop Test..." << std::endl;
+    layers::FeedForward ffn(d_model, d_ff, max_seq_len, batch_size);
     
-    // Logits: [batch_size * seq_len, vocab_size] = [2, 4]
-    Tensor logits({batch_size * seq_len, vocab_size});
-    Tensor dLogits({batch_size * seq_len, vocab_size});
+    init_tensor(ffn.w1->W); init_tensor(ffn.w1->b);
+    init_tensor(ffn.w2->W); init_tensor(ffn.w2->b);
 
-    // --- SETUP SCENARIO ---
-    // Token 1 Logits: [4.0, 1.0, 0.5, 0.1] -> Model STRONGLY predicts word 0
-    logits.h_data[0] = 4.0f; logits.h_data[1] = 1.0f; logits.h_data[2] = 0.5f; logits.h_data[3] = 0.1f;
-    
-    // Token 2 Logits: [0.1, 0.5, 3.0, 1.0] -> Model STRONGLY predicts word 2
-    logits.h_data[4] = 0.1f; logits.h_data[5] = 0.5f; logits.h_data[6] = 3.0f; logits.h_data[7] = 1.0f;
-    
-    logits.to_device(); // Push to GPU
+    Tensor X({batch_size, max_seq_len, d_model});
+    Tensor Y({batch_size, max_seq_len, d_model});
+    Tensor dY({batch_size, max_seq_len, d_model}); // Simulated loss gradient
+    Tensor dX({batch_size, max_seq_len, d_model});
 
-    // Define the actual correct answers (Targets)
-    // Token 1 target: Word 0 (Model is RIGHT!)
-    // Token 2 target: Word 1 (Model is WRONG! It guessed word 2)
-    int h_targets[2] = {0, 1}; 
-    int* d_targets;
-    cudaMalloc((void**)&d_targets, 2 * sizeof(int));
-    cudaMemcpy(d_targets, h_targets, 2 * sizeof(int), cudaMemcpyHostToDevice);
+    // Initialize inputs
+    for(int i = 0; i < X.size; i++) {
+        X.h_data[i] = 1.0f;
+        dY.h_data[i] = 0.5f; // Pretend the loss function sent a flat 0.5 gradient back
+    }
+    X.to_device();
+    dY.to_device();
 
-    std::cout << "Calculating Forward Loss and Backward Gradients..." << std::endl;
-    
-    // Run the fused kernel
-    float loss = criterion.forward_backward(&logits, d_targets, &dLogits);
+    std::cout << "Executing FFN Forward Pass..." << std::endl;
+    ffn.forward(&X, &Y);
     cudaDeviceSynchronize();
 
-    std::cout << "\n=== LOSS SCALAR ===" << std::endl;
-    std::cout << "Total Loss: " << loss << std::endl;
+    std::cout << "Executing FFN Backward Pass..." << std::endl;
+    ffn.backward(&dY, &dX);
+    cudaDeviceSynchronize();
 
-    std::cout << "\n=== BACKWARD GRADIENTS (dLogits) ===" << std::endl;
-    dLogits.to_host(); // Pull gradients back to CPU
-    
-    for (int token = 0; token < seq_len; token++) {
-        std::cout << "Token " << token + 1 << " dLogits: [ ";
-        for (int i = 0; i < vocab_size; i++) {
-            std::cout << std::fixed << std::setprecision(4) << dLogits.h_data[token * vocab_size + i] << "   ";
-        }
-        std::cout << "]" << std::endl;
-    }
-    std::cout << "====================================\n" << std::endl;
+    std::cout << ">>> FFN BACKWARD PASS COMPLETED WITHOUT SEGFAULTS! <<<" << std::endl;
 
-    cudaFree(d_targets);
+    ops::destroy_cublas();
     return 0;
 }

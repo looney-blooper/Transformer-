@@ -31,6 +31,9 @@ namespace layers {
         Tensor* gamma;
         Tensor* beta;
         
+        // Cache for backprop
+        Tensor* X_cache; 
+        Tensor* normalized_cache;
 
         LayerNorm(int d_model, float eps = 1e-5f);
 
@@ -44,6 +47,9 @@ namespace layers {
 
     class GELU {
     public:
+        // Cache for backprop
+        Tensor* X_cache;
+
         GELU() = default;
         ~GELU() = default;
 
@@ -57,13 +63,16 @@ namespace layers {
         Linear* w1;
         Linear* w2;
         GELU* activation;
-        Tensor* hidden_cache;
+
+        Tensor* hidden_cache;    // Holds pre-GELU values
+        Tensor* activated_cache; // NEW: Holds post-GELU values
 
         FeedForward(int d_model, int d_ff, int max_seq_len, int batch_size);
 
         ~FeedForward();
 
         void forward(Tensor* X, Tensor* Y);
+        void backward(Tensor* dY, Tensor* dX);
     };
 
 
