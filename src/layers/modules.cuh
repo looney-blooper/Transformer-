@@ -38,7 +38,7 @@ namespace layers {
 
         void forward(Tensor* X, Tensor* Y);
 
-        void Backward(Tensor* dY, Tensor* dX);
+        void backward(Tensor* dY, Tensor* dX);
     };
 
 
@@ -48,6 +48,7 @@ namespace layers {
         ~GELU() = default;
 
         void forward(Tensor* X, Tensor* Y);
+        void backward(Tensor* dY, Tensor* dX);
     };
 
 
@@ -63,7 +64,6 @@ namespace layers {
         ~FeedForward();
 
         void forward(Tensor* X, Tensor* Y);
-
     };
 
 

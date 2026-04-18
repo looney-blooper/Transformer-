@@ -1,53 +1,58 @@
 #include <iostream>
-#include <vector>
+#include <iomanip>
 #include "core/tensor.cuh"
-#include "core/ops.cuh"
-#include "model/gpt.cuh"
+#include "layers/loss.cuh"
 
 int main() {
-    std::cout << ">>> IGNITING C++ TRANSFORMER ENGINE <<<" << std::endl;
-    ops::init_cublas();
-
-    // Hyperparameters for a tiny "Nano-GPT" testing model
     int batch_size = 1;
-    int max_seq_len = 4;
-    int vocab_size = 1000; // Small vocab for testing
-    int d_model = 32;
-    int num_heads = 4;
-    int d_ff = 128;
-    int num_layers = 2; // Stacking 2 full decoder blocks!
+    int seq_len = 2; // Testing 2 tokens
+    int vocab_size = 4; // A tiny 4-word vocabulary
 
-    std::cout << "\nAllocating Memory for Master GPT Architecture..." << std::endl;
-    model::GPT gpt(vocab_size, d_model, num_heads, d_ff, num_layers, max_seq_len, batch_size);
-
-    // 1. Create raw input data (Integer Token IDs)
-    int h_input_ids[4] = {45, 102, 9, 88}; 
-    int* d_input_ids;
+    std::cout << "Allocating Memory for Loss Test..." << std::endl;
+    layers::CrossEntropyLoss criterion;
     
-    // Allocate integer memory directly on the GPU
-    cudaMalloc((void**)&d_input_ids, max_seq_len * sizeof(int));
-    cudaMemcpy(d_input_ids, h_input_ids, max_seq_len * sizeof(int), cudaMemcpyHostToDevice);
+    // Logits: [batch_size * seq_len, vocab_size] = [2, 4]
+    Tensor logits({batch_size * seq_len, vocab_size});
+    Tensor dLogits({batch_size * seq_len, vocab_size});
 
-    // 2. Create the output Logits Tensor
-    // Shape: [batch_size, max_seq_len, vocab_size]
-    Tensor Logits({batch_size, max_seq_len, vocab_size});
-
-    std::cout << "Executing Full Forward Pass..." << std::endl;
+    // --- SETUP SCENARIO ---
+    // Token 1 Logits: [4.0, 1.0, 0.5, 0.1] -> Model STRONGLY predicts word 0
+    logits.h_data[0] = 4.0f; logits.h_data[1] = 1.0f; logits.h_data[2] = 0.5f; logits.h_data[3] = 0.1f;
     
-    // THE MOMENT OF TRUTH
-    gpt.forward(d_input_ids, &Logits);
-    cudaDeviceSynchronize(); // Force CPU to wait for GPU
-
-    std::cout << "Forward Pass Completed with ZERO Segmentation Faults!" << std::endl;
-    std::cout << "\nOutput Logits Shape: [" 
-              << Logits.shape[0] << ", " 
-              << Logits.shape[1] << ", " 
-              << Logits.shape[2] << "]" << std::endl;
-
-    // Clean up our manually allocated integer array
-    cudaFree(d_input_ids);
-    ops::destroy_cublas();
+    // Token 2 Logits: [0.1, 0.5, 3.0, 1.0] -> Model STRONGLY predicts word 2
+    logits.h_data[4] = 0.1f; logits.h_data[5] = 0.5f; logits.h_data[6] = 3.0f; logits.h_data[7] = 1.0f;
     
-    std::cout << "\nArchitecture complete. Ready for Backpropagation." << std::endl;
+    logits.to_device(); // Push to GPU
+
+    // Define the actual correct answers (Targets)
+    // Token 1 target: Word 0 (Model is RIGHT!)
+    // Token 2 target: Word 1 (Model is WRONG! It guessed word 2)
+    int h_targets[2] = {0, 1}; 
+    int* d_targets;
+    cudaMalloc((void**)&d_targets, 2 * sizeof(int));
+    cudaMemcpy(d_targets, h_targets, 2 * sizeof(int), cudaMemcpyHostToDevice);
+
+    std::cout << "Calculating Forward Loss and Backward Gradients..." << std::endl;
+    
+    // Run the fused kernel
+    float loss = criterion.forward_backward(&logits, d_targets, &dLogits);
+    cudaDeviceSynchronize();
+
+    std::cout << "\n=== LOSS SCALAR ===" << std::endl;
+    std::cout << "Total Loss: " << loss << std::endl;
+
+    std::cout << "\n=== BACKWARD GRADIENTS (dLogits) ===" << std::endl;
+    dLogits.to_host(); // Pull gradients back to CPU
+    
+    for (int token = 0; token < seq_len; token++) {
+        std::cout << "Token " << token + 1 << " dLogits: [ ";
+        for (int i = 0; i < vocab_size; i++) {
+            std::cout << std::fixed << std::setprecision(4) << dLogits.h_data[token * vocab_size + i] << "   ";
+        }
+        std::cout << "]" << std::endl;
+    }
+    std::cout << "====================================\n" << std::endl;
+
+    cudaFree(d_targets);
     return 0;
 }

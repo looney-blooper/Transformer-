@@ -126,7 +126,7 @@ __global__ void add_pe_kernel(float* X, float* PE, int seq_len, int d_model, int
 namespace layers {
 
     // --------------------------------------------------------
-    // 2. LINEAR LAYER CONSTRUCTOR
+    // LINEAR LAYER CONSTRUCTOR
     // --------------------------------------------------------
     Linear::Linear(int in_feat, int out_feat) {
         in_features = in_feat;
@@ -149,9 +149,7 @@ namespace layers {
         delete b;
     }
 
-    // --------------------------------------------------------
-    // 3. FORWARD PASS
-    // --------------------------------------------------------
+    
     void Linear::forward(Tensor* X, Tensor* Y) {
         // Cache the input. We NEED this later to calculate gradients in the backward pass!
         X_cache = X;
@@ -177,9 +175,7 @@ namespace layers {
         }
     }
 
-    // --------------------------------------------------------
-    // 4. BACKWARD PASS (The Chain Rule)
-    // --------------------------------------------------------
+    
     void Linear::backward(Tensor* dY, Tensor* dX) {
         if (X_cache == nullptr) {
             std::cerr << "Error: Cannot run backward pass before forward pass!" << std::endl;
@@ -222,7 +218,9 @@ namespace layers {
         }
     }
 
-
+    // --------------------------------------------------------
+    // LayerNorm IMPLEMENTATION
+    // --------------------------------------------------------
     LayerNorm::LayerNorm(int d_model, float eps) {
         this->d_model = d_model;
         this->eps = eps;
@@ -269,7 +267,13 @@ namespace layers {
         }
     }
 
-    //GELU Activation
+    void LayerNorm::backward(Tensor* dY, Tensor* dX){
+        
+    }
+
+    // --------------------------------------------------------
+    // GELU IMPLEMENTATION
+    // --------------------------------------------------------
     void GELU::forward(Tensor* X, Tensor* Y){
         int total_elements = X->size;
         int threads_per_block = 256;
@@ -284,7 +288,13 @@ namespace layers {
         }
     }
 
-    ///FEED FORWARD NEURAL NETWORK
+    void GELU::backward(Tensor* dY, Tensor* dX){
+
+    }
+
+    // --------------------------------------------------------
+    // FeedForward IMPLEMENTATION
+    // --------------------------------------------------------
     FeedForward::FeedForward(int d_model, int d_ff, int max_seq_len, int batch_size){
         w1 = new Linear(d_model, d_ff);
         w2 = new Linear(d_ff, d_model);
