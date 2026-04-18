@@ -25,6 +25,8 @@ namespace model {
 
         std::vector<int> hidden_shape = {batch_size, max_seq_len, d_model};
         hidden_state = new Tensor(hidden_shape);
+
+        d_hidden_state = new Tensor(hidden_shape);
     }
 
     GPT::~GPT(){
@@ -34,6 +36,7 @@ namespace model {
         delete final_ln;
         delete lm_head;
         delete hidden_state;
+        delete d_hidden_state;
     }
 
     void GPT::forward(int* d_input_ids, Tensor* logits){
@@ -55,5 +58,30 @@ namespace model {
 
         // Step 5: Language Model Head Projection (Hidden -> Vocab Size)
         lm_head->forward(hidden_state, logits);
+    }
+
+    void GPT::backward(Tensor* dLogits){
+        int total_tokens = batch_size * max_seq_len;
+
+        // Step 1: Backprop through the Language Model Head
+        // Takes dLogits [batch, seq, vocab] -> Outputs d_hidden_state [batch, seq, d_model]
+        lm_head->backward(dLogits, d_hidden_state);
+
+        // Step 2: Backprop through the Final Layer Norm
+        // We do this in-place to save memory!
+        final_ln->backward(d_hidden_state, d_hidden_state);
+
+        // Step 3: Backprop through the Decoder Blocks IN REVERSE ORDER
+        for (int i = num_layers - 1; i >= 0; i--) {
+            // DecoderBlock modifies d_hidden_state in-place via residual addition
+            blocks[i]->backward(d_hidden_state);
+        }
+
+        // Note: Positional Encodings have no learnable weights. The gradients 
+        // simply flow straight past them, unchanged.
+
+        // Step 4: Backprop into the Token Embeddings
+        // Maps the d_hidden_state vectors back to specific vocabulary IDs
+        tok_emb->backward(d_hidden_state, total_tokens);
     }
 }

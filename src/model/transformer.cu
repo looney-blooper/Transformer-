@@ -10,7 +10,8 @@ namespace model {
         ffn = new layers::FeedForward(d_model, d_ff, max_seq_len, batch_size);
 
         std::vector<int> shape = {batch_size, max_seq_len, d_model};
-        norm_cache = new Tensor(shape);
+        norm_cache_1 = new Tensor(shape);
+        norm_cache_2 = new Tensor(shape);
         attn_out = new Tensor(shape);
         ffn_out = new Tensor(shape);
 
@@ -24,7 +25,8 @@ namespace model {
         delete mha;
         delete ln2;
         delete ffn;
-        delete norm_cache;
+        delete norm_cache_1;
+        delete norm_cache_2;
         delete ffn_out;
         delete attn_out;
         delete d_norm_cache;
@@ -35,10 +37,10 @@ namespace model {
     void DecoderBlock::forward(Tensor* X){
         // --- SUBLAYER 1: ATTENTION ---
         // 1. Pre-Norm: norm_cache = LayerNorm(X)
-        ln1->forward(X, norm_cache);
+        ln1->forward(X, norm_cache_1);
 
         // 2. Attention: attn_out = MHA(norm_cache)
-        mha->forward(norm_cache, attn_out);
+        mha->forward(norm_cache_1, attn_out);
 
         // 3. Residual 1: X = X + attn_out
         ops::add_tensors(X, attn_out);
@@ -46,10 +48,10 @@ namespace model {
         // --- SUBLAYER 2: FEED-FORWARD ---
         // 4. Pre-Norm: norm_cache = LayerNorm(X) 
         // (We safely overwrite the old norm_cache to save VRAM!)
-        ln2->forward(X, norm_cache);
+        ln2->forward(X, norm_cache_2);
 
         // 5. FFN: ffn_out = FFN(norm_cache)
-        ffn->forward(norm_cache, ffn_out);
+        ffn->forward(norm_cache_2, ffn_out);
 
         // 6. Residual 2: X = X + ffn_out
         ops::add_tensors(X, ffn_out);

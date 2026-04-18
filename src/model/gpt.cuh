@@ -29,6 +29,7 @@ namespace model {
 
         // The main sequence memory buffer that flows through the network
         Tensor* hidden_state;
+        Tensor* d_hidden_state;
 
         GPT(int vocab_size, int d_model, int num_heads, int d_ff, int num_layers, int max_seq_len, int batch_size);
         ~GPT();
@@ -37,5 +38,6 @@ namespace model {
         // X_ids is an array of integer tokens on the GPU.
         // Logits is the final un-normalized probability output.
         void forward(int* d_input_ids, Tensor* logits);
+        void backward(Tensor* dLogits);
     };
 }

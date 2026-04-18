@@ -12,7 +12,8 @@ namespace model {
         layers::FeedForward* ffn;
         
         //Intermidiate Caches
-        Tensor* norm_cache;
+        Tensor* norm_cache_1;
+        Tensor* norm_cache_2;
         Tensor* attn_out;
         Tensor* ffn_out;
 
@@ -20,6 +21,7 @@ namespace model {
         Tensor* d_norm_cache;
         Tensor* d_attn_out;
         Tensor* d_ffn_out;
+
 
 
         DecoderBlock(int d_model, int num_heads, int d_ff, int max_seq_len, int batch_size);

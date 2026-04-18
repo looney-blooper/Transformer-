@@ -317,6 +317,9 @@ namespace layers {
     }
 
     void LayerNorm::forward(Tensor* X, Tensor* Y){
+        X_cache = X;
+        normalized_cache = Y;
+
         int total_tokens = X->size / d_model;
 
         int threads_per_block = 256;

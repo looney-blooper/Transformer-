@@ -1,58 +1,69 @@
 #include <iostream>
-#include <iomanip>
+#include <vector>
 #include "core/tensor.cuh"
 #include "core/ops.cuh"
-#include "layers/attention.cuh"
-
-// Helper to initialize weights safely so Softmax doesn't explode
-void init_tensor(Tensor* t) {
-    for(int i = 0; i < t->size; i++) {
-        t->h_data[i] = ((float)(rand() % 100) / 100.0f) * 0.1f;
-    }
-    t->to_device();
-}
+#include "model/gpt.cuh"
+#include "layers/loss.cuh"
 
 int main() {
-    std::cout << ">>> IGNITING MHA BACKPROP TEST <<<" << std::endl;
+    std::cout << "==================================================" << std::endl;
+    std::cout << ">>> IGNITING FULL C++ TRANSFORMER TRAINING STEP <<<" << std::endl;
+    std::cout << "==================================================\n" << std::endl;
+    
     ops::init_cublas();
 
+    // Model Architecture Hyperparameters
     int batch_size = 1;
     int max_seq_len = 4;
-    int d_model = 8;
-    int num_heads = 2;
+    int vocab_size = 1000;
+    int d_model = 32;
+    int num_heads = 4;
+    int d_ff = 128;
+    int num_layers = 2; // Stacking multiple blocks!
 
-    std::cout << "Allocating Memory for Multi-Head Attention..." << std::endl;
-    layers::MultiHeadAttention mha(d_model, num_heads, max_seq_len, batch_size);
+    std::cout << "[1/4] Allocating Master GPT Architecture..." << std::endl;
+    model::GPT gpt(vocab_size, d_model, num_heads, d_ff, num_layers, max_seq_len, batch_size);
+    layers::CrossEntropyLoss criterion;
+
+    // --- SETUP SCENARIO ---
+    // We pass 4 integer tokens into the model
+    int h_input_ids[4] = {45, 102, 9, 88}; 
+    int* d_input_ids;
+    cudaMalloc((void**)&d_input_ids, max_seq_len * sizeof(int));
+    cudaMemcpy(d_input_ids, h_input_ids, max_seq_len * sizeof(int), cudaMemcpyHostToDevice);
+
+    // We tell the model what the NEXT words were supposed to be
+    int h_targets[4] = {102, 9, 88, 500}; 
+    int* d_targets;
+    cudaMalloc((void**)&d_targets, max_seq_len * sizeof(int));
+    cudaMemcpy(d_targets, h_targets, max_seq_len * sizeof(int), cudaMemcpyHostToDevice);
+
+    Tensor Logits({batch_size, max_seq_len, vocab_size});
+    Tensor dLogits({batch_size, max_seq_len, vocab_size});
+
+    // --- EXECUTE TRAINING STEP ---
+    std::cout << "[2/4] Executing Deep Forward Pass..." << std::endl;
+    gpt.forward(d_input_ids, &Logits);
+    cudaDeviceSynchronize();
+
+    std::cout << "[3/4] Calculating Cross-Entropy Loss..." << std::endl;
+    float loss = criterion.forward_backward(&Logits, d_targets, &dLogits);
+    cudaDeviceSynchronize();
     
-    // Safely initialize the projection weights
-    init_tensor(mha.W_q->W); init_tensor(mha.W_q->b);
-    init_tensor(mha.W_k->W); init_tensor(mha.W_k->b);
-    init_tensor(mha.W_v->W); init_tensor(mha.W_v->b);
-    init_tensor(mha.W_o->W); init_tensor(mha.W_o->b);
+    std::cout << "      -> Current Model Loss: " << loss << std::endl;
 
-    Tensor X({batch_size, max_seq_len, d_model});
-    Tensor Y({batch_size, max_seq_len, d_model});
-    Tensor dY({batch_size, max_seq_len, d_model}); // Simulated loss gradient
-    Tensor dX({batch_size, max_seq_len, d_model}); // The final output gradient
-
-    // Initialize inputs
-    for(int i = 0; i < X.size; i++) {
-        X.h_data[i] = 1.0f;
-        dY.h_data[i] = 0.5f; // Pretend the loss sent a flat 0.5 gradient
-    }
-    X.to_device();
-    dY.to_device();
-
-    std::cout << "Executing Forward Pass (Building Q, K, V, P)..." << std::endl;
-    mha.forward(&X, &Y);
+    std::cout << "[4/4] Executing Deep Backward Pass (Chain Rule)..." << std::endl;
+    gpt.backward(&dLogits);
     cudaDeviceSynchronize();
 
-    std::cout << "Executing Backward Pass (Unraveling the Calculus)..." << std::endl;
-    mha.backward(&dY, &dX);
-    cudaDeviceSynchronize();
+    std::cout << "\n==================================================" << std::endl;
+    std::cout << ">>> END-TO-END TRAINING STEP EXECUTED PERFECTLY <<<" << std::endl;
+    std::cout << "==================================================" << std::endl;
 
-    std::cout << ">>> MHA BACKWARD PASS COMPLETED WITHOUT SEGFAULTS! <<<" << std::endl;
-
+    // Cleanup
+    cudaFree(d_input_ids);
+    cudaFree(d_targets);
     ops::destroy_cublas();
+    
     return 0;
 }
