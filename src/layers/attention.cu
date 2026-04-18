@@ -91,6 +91,38 @@ __global__ void scaled_softmax_kernel(float* attn_scores, int seq_len, float sca
     }
 }
 
+// --------------------------------------------------------
+// MASKED SCALED-SOFTMAX BACKWARD KERNEL
+// --------------------------------------------------------
+__global__ void masked_softmax_backward_kernel(float* dP, float* P, int seq_len, float scale, int batch_size) {
+    // b = batch index, row = token query index
+    int b = blockIdx.y; 
+    int row = blockIdx.x * blockDim.x + threadIdx.x; 
+
+    if (b < batch_size && row < seq_len) {
+        int row_offset = (b * seq_len * seq_len) + (row * seq_len);
+
+        // Step 1: Calculate the dot product of (P * dP) for this row
+        float sum_p_dp = 0.0f;
+        for (int col = 0; col <= row; col++) {
+            sum_p_dp += P[row_offset + col] * dP[row_offset + col];
+        }
+
+        // Step 2: Calculate the final gradient and overwrite dP in-place
+        for (int col = 0; col <= row; col++) {
+            float p_val = P[row_offset + col];
+            float dp_val = dP[row_offset + col];
+            
+            // The Softmax derivative + scaling factor
+            dP[row_offset + col] = scale * p_val * (dp_val - sum_p_dp);
+        }
+
+        // Step 3: Zero out the causally masked future just to be perfectly safe
+        for (int col = row + 1; col < seq_len; col++) {
+            dP[row_offset + col] = 0.0f;
+        }
+    }
+}
 
 namespace layers {
     MultiHeadAttention::MultiHeadAttention(int d_model, int num_heads, int max_seq_len, int batch_size) {
@@ -111,10 +143,24 @@ namespace layers {
         V = new Tensor(qkv_shape);
         Context = new Tensor(qkv_shape); // Context output has the same shape
 
+
+        //Gradients
+        dQ = new Tensor(qkv_shape);
+        dK = new Tensor(qkv_shape);
+        dV = new Tensor(qkv_shape);
+        dContext = new Tensor(qkv_shape);
+
+        dX_q = new Tensor(qkv_shape);
+        dX_k = new Tensor(qkv_shape);
+        dX_v = new Tensor(qkv_shape);
+
+
         // FIX 2: Attention Scores must be an N x N matrix per batch
         // Shape: [batch_size, max_seq_len, max_seq_len]
         std::vector<int> attn_shape = {batch_size, max_seq_len, max_seq_len};
         Attention_Scores = new Tensor(attn_shape);
+
+        dAttention_Scores = new Tensor(attn_shape);
     }
 
     MultiHeadAttention::~MultiHeadAttention(){
@@ -127,6 +173,15 @@ namespace layers {
         delete V;
         delete Attention_Scores;
         delete Context;
+
+        delete dQ;
+        delete dK;
+        delete dV;
+        delete dX_q;
+        delete dX_k;
+        delete dX_v;
+        delete dAttention_Scores;
+        delete dContext;
     }
 
     void MultiHeadAttention::forward(Tensor* X, Tensor* Y){
@@ -177,5 +232,62 @@ namespace layers {
         if (Y != nullptr) {
             W_o->forward(Context, Y);
         }
+    }
+
+
+    void MultiHeadAttention::backward(Tensor* dY, Tensor* dX){
+        int batch_size = Q->shape[0];
+        int seq_len = Q->shape[1];
+
+        // 1. Backprop through the Output Projection (W_o)
+        // dContext = dY * W_o^T
+        W_o->backward(dY, dContext);
+
+        // 2. Backprop through the (Scores * V) multiplication
+        // dV = Scores^T * dContext (Note: Transpose A!)
+        ops::matmul(Attention_Scores, dContext, dV, true, false);
+
+        // dScores = dContext * V^T (Note: Transpose B!)
+        ops::matmul(dContext, V, dAttention_Scores, false, true);
+
+        // 3. Backprop through the Causal Softmax
+        float scale = 1.0f / sqrtf((float)d_k);
+        int threads_per_block = 128;
+        int blocks_x = (seq_len + threads_per_block - 1) / threads_per_block;
+        int blocks_y = batch_size;
+
+        dim3 gridDim(blocks_x, blocks_y);
+        dim3 blockDim(threads_per_block);
+
+        masked_softmax_backward_kernel<<<gridDim, blockDim>>>(
+            dAttention_Scores->d_data, // acts as dP input, overwritten to become dS output
+            Attention_Scores->d_data,  // forward probabilities P
+            seq_len, 
+            scale, 
+            batch_size
+        );
+
+        // 4. Backprop through the (Q * K^T) multiplication
+        // dQ = dScores * K
+        ops::matmul(dAttention_Scores, K, dQ, false, false);
+        
+        // dK = dScores^T * Q (Note: Transpose A!)
+        ops::matmul(dAttention_Scores, Q, dK, true, false);
+
+        // 5. Backprop through the Q, K, V Linear Projections
+        W_q->backward(dQ, dX_q);
+        W_k->backward(dK, dX_k);
+        W_v->backward(dV, dX_v);
+
+        // 6. Accumulate the final gradient for X
+        // Because the input X split into three paths (Q, K, V), the chain rule 
+        // dictates we must sum their gradients together to get the total dX.
+        
+        // First, zero out dX since we are going to accumulate into it
+        cudaMemset(dX->d_data, 0, dX->size * sizeof(float));
+
+        ops::add_tensors(dX, dX_q);
+        ops::add_tensors(dX, dX_k);
+        ops::add_tensors(dX, dX_v);
     }
 }
