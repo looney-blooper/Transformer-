@@ -13,6 +13,10 @@ namespace model {
         norm_cache = new Tensor(shape);
         attn_out = new Tensor(shape);
         ffn_out = new Tensor(shape);
+
+        d_norm_cache = new Tensor(shape);
+        d_attn_out = new Tensor(shape);
+        d_ffn_out = new Tensor(shape);
     }
 
     DecoderBlock::~DecoderBlock(){
@@ -23,6 +27,9 @@ namespace model {
         delete norm_cache;
         delete ffn_out;
         delete attn_out;
+        delete d_norm_cache;
+        delete d_ffn_out;
+        delete d_attn_out;
     }
 
     void DecoderBlock::forward(Tensor* X){
@@ -48,4 +55,26 @@ namespace model {
         ops::add_tensors(X, ffn_out);
     }
 
+
+    void DecoderBlock::backward(Tensor* dX){
+        // --- REVERSE SUBLAYER 2: FEED-FORWARD ---
+        // 1. FFN Backward: Calculates gradients for w1/w2 and outputs d_norm_cache
+        ffn->backward(dX, d_norm_cache);
+        
+        // 2. LayerNorm 2 Backward: Calculates gradients for gamma/beta and outputs d_ffn_out
+        ln2->backward(d_norm_cache, d_ffn_out);
+        
+        // 3. Residual 2: Add the sublayer gradient back into the main stream
+        ops::add_tensors(dX, d_ffn_out);
+
+        // --- REVERSE SUBLAYER 1: ATTENTION ---
+        // 4. Attention Backward: Calculates gradients for Q/K/V/O and outputs d_norm_cache
+        mha->backward(dX, d_norm_cache);
+        
+        // 5. LayerNorm 1 Backward: Calculates gradients for gamma/beta and outputs d_attn_out
+        ln1->backward(d_norm_cache, d_attn_out);
+        
+        // 6. Residual 1: Add the sublayer gradient back into the main stream
+        ops::add_tensors(dX, d_attn_out);
+    }
 }
