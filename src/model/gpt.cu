@@ -84,4 +84,44 @@ namespace model {
         // Maps the d_hidden_state vectors back to specific vocabulary IDs
         tok_emb->backward(d_hidden_state, total_tokens);
     }
+
+    // --------------------------------------------------------
+    // PARAMETER GATHERING (For the Optimizer)
+    // --------------------------------------------------------
+    std::vector<Tensor*> GPT::parameters() {
+        std::vector<Tensor*> params;
+
+        // 1. Embeddings
+        params.push_back(tok_emb->weight);
+        // Note: Positional Encodings are fixed math, NOT learnable parameters!
+
+        // 2. Decoder Blocks
+        for (auto block : blocks) {
+            // LayerNorm 1
+            params.push_back(block->ln1->gamma);
+            params.push_back(block->ln1->beta);
+            
+            // Attention Projections
+            params.push_back(block->mha->W_q->W); params.push_back(block->mha->W_q->b);
+            params.push_back(block->mha->W_k->W); params.push_back(block->mha->W_k->b);
+            params.push_back(block->mha->W_v->W); params.push_back(block->mha->W_v->b);
+            params.push_back(block->mha->W_o->W); params.push_back(block->mha->W_o->b);
+            
+            // LayerNorm 2
+            params.push_back(block->ln2->gamma);
+            params.push_back(block->ln2->beta);
+
+            // Feed-Forward
+            params.push_back(block->ffn->w1->W);  params.push_back(block->ffn->w1->b);
+            params.push_back(block->ffn->w2->W);  params.push_back(block->ffn->w2->b);
+        }
+
+        // 3. Final Output Layers
+        params.push_back(final_ln->gamma);
+        params.push_back(final_ln->beta);
+        params.push_back(lm_head->W);
+        params.push_back(lm_head->b);
+
+        return params;
+    }
 }

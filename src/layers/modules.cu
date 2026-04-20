@@ -462,16 +462,15 @@ namespace layers {
     }
 
     void Embedding::backward(Tensor* dY, int total_tokens){
-        // 1. Zero out the old gradients from the previous training step
-        // If we don't do this, gradients will accumulate to infinity!
-        cudaMemset(dWeight->d_data, 0, dWeight->size * sizeof(float));
+       // 1. Zero out the old gradients in the NATIVE d_grad array
+        cudaMemset(weight->d_grad, 0, weight->size * sizeof(float));
 
-        // 2. Launch the atomic accumulation kernel
         int threads_per_block = 256;
         int blocks = (total_tokens + threads_per_block - 1) / threads_per_block;
 
+        // 2. Route the atomic additions directly into weight->d_grad
         embedding_backward_kernel<<<blocks, threads_per_block>>>(
-            dY->d_data, dWeight->d_data, ids_cache, d_model, total_tokens
+            dY->d_data, weight->d_grad, ids_cache, d_model, total_tokens
         );
     }
 

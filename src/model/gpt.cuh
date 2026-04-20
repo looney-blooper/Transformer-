@@ -39,5 +39,7 @@ namespace model {
         // Logits is the final un-normalized probability output.
         void forward(int* d_input_ids, Tensor* logits);
         void backward(Tensor* dLogits);
+
+        std::vector<Tensor*> parameters();
     };
 }
