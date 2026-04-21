@@ -162,11 +162,89 @@ __global__ void masked_softmax_backward_kernel(float* dP, float* P, int seq_len,
     }
 }
 
+// --------------------------------------------------------
+// KV-CACHE APPEND KERNEL
+// --------------------------------------------------------
+// Takes a new vector of shape [Batch, Heads, 1, Dk]
+// Injects it into Cache of shape [Batch, Heads, MaxSeq, Dk] at the specified 'step' index
+__global__ void append_kv_cache_kernel(float* cache, float* new_vec, int max_seq_len, int d_k, int step) {
+    // b = batch, h = head, d = dimension inside the vector
+    int b = blockIdx.z;
+    int h = blockIdx.y;
+    int d = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (d < d_k) {
+        // 1. Where to read from the newly generated token
+        // Shape is [B, H, 1, Dk], so we skip across heads
+        int src_idx = (b * gridDim.y * d_k) + (h * d_k) + d;
+        
+        // 2. Where to write it in the massive historical cache
+        // Shape is [B, H, MaxSeq, Dk]. We offset by 'step' to drop it in the correct row!
+        int dst_idx = (b * gridDim.y * max_seq_len * d_k) + (h * max_seq_len * d_k) + (step * d_k) + d;
+        
+        cache[dst_idx] = new_vec[src_idx];
+    }
+}
+
+// --------------------------------------------------------
+// INFERENCE SOFTMAX KERNEL (Respects Cache Strides)
+// --------------------------------------------------------
+__global__ void inference_softmax_kernel(float* attn_scores, int active_len, int max_seq_len, float scale, int total_rows) {
+    int row = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    if (row < total_rows) {
+        int row_offset = row * max_seq_len; // Physical memory jump to the next Head
+        
+        // 1. Scale and find Max
+        float max_val = -1e20f;
+        for (int i = 0; i < active_len; i++) {
+            attn_scores[row_offset + i] *= scale;
+            if (attn_scores[row_offset + i] > max_val) {
+                max_val = attn_scores[row_offset + i];
+            }
+        }
+        
+        // 2. Exponentiate and Sum
+        float sum_exp = 0.0f;
+        for (int i = 0; i < active_len; i++) {
+            float exp_val = expf(attn_scores[row_offset + i] - max_val);
+            attn_scores[row_offset + i] = exp_val;
+            sum_exp += exp_val;
+        }
+        
+        // 3. Normalize
+        for (int i = 0; i < active_len; i++) {
+            attn_scores[row_offset + i] /= sum_exp;
+        }
+    }
+}// --------------------------------------------------------
+// CAUSAL MASK KERNEL (Prevents Cheating in Phase 1)
+// --------------------------------------------------------
+__global__ void causal_mask_kernel(float* scores, int max_seq_len, int total_rows) {
+    int row = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    if (row < total_rows) {
+        // scores is shape [Batch, Heads, max_seq_len, max_seq_len]
+        // We find which exact token row we are on within the sequence
+        int seq_row = row % max_seq_len; 
+        int offset = row * max_seq_len;
+        
+        // Loop through the Keys (columns)
+        for (int col = 0; col < max_seq_len; col++) {
+            // If the Key is in the future relative to the Query, obliterate it!
+            if (col > seq_row) {
+                scores[offset + col] = -1e20f;
+            }
+        }
+    }
+}
+
 namespace layers {
     MultiHeadAttention::MultiHeadAttention(int d_model, int num_heads, int max_seq_len, int batch_size) {
         this->d_model = d_model;
         this->num_heads = num_heads;
         this->d_k = d_model / num_heads;
+        this->max_seq_len = max_seq_len;
 
         W_q = new Linear(d_model, d_model);
         W_k = new Linear(d_model, d_model);
@@ -208,6 +286,18 @@ namespace layers {
         
         Attention_Scores = new Tensor(attn_shape);
         dAttention_Scores = new Tensor(attn_shape); // Backward pass needs room too!
+
+        ////////////
+        //KV CACHE//
+        ////////////
+        use_kv_cache = false;
+        current_cache_len = 0;
+
+        std::vector<int> cache_shape = {batch_size, num_heads, max_seq_len, this->d_k};
+        K_cache = new Tensor(cache_shape);
+        V_cache = new Tensor(cache_shape);
+
+        Inference_Scores = new Tensor({batch_size, num_heads, 1, max_seq_len});
     }
 
     MultiHeadAttention::~MultiHeadAttention(){
@@ -239,6 +329,11 @@ namespace layers {
         delete dK_transposed;
         delete dV_transposed;
         delete dContext_transposed;
+
+        delete K_cache;
+        delete V_cache;
+
+        delete Inference_Scores;
     }
 
     void MultiHeadAttention::forward(Tensor* X, Tensor* Y) {
@@ -247,42 +342,123 @@ namespace layers {
         int H = num_heads;
         int Dk = d_model / H;
 
-        // 1. Initial Projections (Linear) -> Output is Interleaved
-        W_q->forward(X, Q);
-        W_k->forward(X, K);
-        W_v->forward(X, V);
 
-        // 2. Transpose to Head-Major [B, H, S, Dk]
-        dim3 grid_trans( (S + 31) / 32, H, B );
-        transpose_qkv_kernel<<<grid_trans, 32>>>(Q->d_data, Q_transposed->d_data, B, S, H, Dk);
-        transpose_qkv_kernel<<<grid_trans, 32>>>(K->d_data, K_transposed->d_data, B, S, H, Dk);
-        transpose_qkv_kernel<<<grid_trans, 32>>>(V->d_data, V_transposed->d_data, B, S, H, Dk);
 
-        // 3. Batched QK^T -> Scores [B, H, S, S]
-        ops::strided_batched_matmul(Q_transposed, K_transposed, Attention_Scores, B, H, S, S, Dk, false, true);
+        if (use_kv_cache) {
+            // ==========================================
+            // KV-CACHE INFERENCE (O(1) Memory)
+            // ==========================================
+            
+            // 1. Projections for the SINGLE token
+            W_q->forward(X, Q);
+            W_k->forward(X, K);
+            W_v->forward(X, V);
 
-        // 4. Fused Masked Softmax 
-        int threads_per_block = 256;
-        int blocks_x = (S + threads_per_block - 1) / threads_per_block;
-        int blocks_y = B * H; // ONE BLOCK PER HEAD!
-        
-        dim3 grid(blocks_x, blocks_y);
-        dim3 block(threads_per_block);
-        float scale = 1.0f / sqrtf((float)Dk);
-        
-        masked_scaled_softmax_kernel<<<grid, block>>>(Attention_Scores->d_data, S, scale, B, H);
+            // 2. Transpose to Head-Major [B, H, 1, Dk]
+            dim3 grid_trans( 1, H, B );
+            transpose_qkv_kernel<<<grid_trans, 32>>>(Q->d_data, Q_transposed->d_data, B, 1, H, Dk);
+            transpose_qkv_kernel<<<grid_trans, 32>>>(K->d_data, K_transposed->d_data, B, 1, H, Dk);
+            transpose_qkv_kernel<<<grid_trans, 32>>>(V->d_data, V_transposed->d_data, B, 1, H, Dk);
 
-        // 5. Batched Scores * V -> Context [B, H, S, Dk]
-        ops::strided_batched_matmul(Attention_Scores, V_transposed, Context_transposed, B, H, S, Dk, S, false, false);
+            // 3. Append the new K and V into the Persistent Cache
+            dim3 grid_append( (Dk + 255)/256, H, B );
+            append_kv_cache_kernel<<<grid_append, 256>>>(
+                K_cache->d_data, K_transposed->d_data, max_seq_len, Dk, current_cache_len);
+            append_kv_cache_kernel<<<grid_append, 256>>>(
+                V_cache->d_data, V_transposed->d_data, max_seq_len, Dk, current_cache_len);
+            
+            current_cache_len++; 
+            int active_len = current_cache_len;
 
-        // 6. Untranspose back to Token-Major [B, S, H, Dk]
-        dim3 grid_untrans( (H + 31) / 32, S, B );
-        untranspose_output_kernel<<<grid_untrans, 32>>>(Context_transposed->d_data, Context->d_data, B, H, S, Dk);
+            // 4. Q * K_cache^T -> [B, H, 1, max_seq_len]
+            long long int strideQ = 1 * Dk; 
+            long long int strideK = max_seq_len * Dk;     // Physical gap in K_cache
+            long long int strideScores = 1 * max_seq_len; // Physical gap in Inference_Scores
 
-        // 7. Final Output Projection
-        if (Y != nullptr) {
-            W_o->forward(Context, Y);
-        }
+            ops::strided_batched_matmul_kvcache(
+                Q_transposed, K_cache, Inference_Scores, B, H, 
+                1, active_len, Dk, false, true, 
+                strideQ, strideK, strideScores
+            );
+
+            // 5. Unmasked Inference Softmax
+            int total_rows = B * H;
+            int threads = 256;
+            int blocks = (total_rows + threads - 1) / threads;
+            float scale = 1.0f / sqrtf((float)Dk);
+            
+            inference_softmax_kernel<<<blocks, threads>>>(
+                Inference_Scores->d_data, active_len, max_seq_len, scale, total_rows
+            );
+
+            // 6. Scores * V_cache -> [B, H, 1, Dk]
+            long long int strideV = max_seq_len * Dk; // Physical gap in V_cache
+            long long int strideCtx = 1 * Dk;         // Physical gap in Context_transposed
+
+            ops::strided_batched_matmul_kvcache(
+                Inference_Scores, V_cache, Context_transposed, B, H, 
+                1, Dk, active_len, false, false, 
+                strideScores, strideV, strideCtx
+            );
+
+            // 7. Untranspose back to Interleaved [B, 1, H, Dk]
+            dim3 grid_untrans( (H + 31) / 32, 1, B );
+            untranspose_output_kernel<<<grid_untrans, 32>>>(
+                Context_transposed->d_data, Context->d_data, B, H, 1, Dk);
+
+            // 8. Final Output Projection
+            if (Y != nullptr) W_o->forward(Context, Y);
+
+        } else {
+
+            // 1. Projections
+            W_q->forward(X, Q);
+            W_k->forward(X, K);
+            W_v->forward(X, V);
+
+            // 2. Transpose to Head-Major [B, H, S, Dk]
+            dim3 grid_trans( (S + 31) / 32, H, B );
+            transpose_qkv_kernel<<<grid_trans, 32>>>(Q->d_data, Q_transposed->d_data, B, S, H, Dk);
+            transpose_qkv_kernel<<<grid_trans, 32>>>(K->d_data, K_transposed->d_data, B, S, H, Dk);
+            transpose_qkv_kernel<<<grid_trans, 32>>>(V->d_data, V_transposed->d_data, B, S, H, Dk);
+
+            // 3. Batched QK^T -> Scores [B, H, S, S]
+            ops::strided_batched_matmul(Q_transposed, K_transposed, Attention_Scores, B, H, S, S, Dk, false, true);
+
+            // ==========================================
+            // 3.5. THE CAUSAL MASK (No more cheating!)
+            // ==========================================
+            int total_rows = B * H * S; 
+            int mask_threads = 256;
+            int mask_blocks = (total_rows + mask_threads - 1) / mask_threads;
+            
+            causal_mask_kernel<<<mask_blocks, mask_threads>>>(
+                Attention_Scores->d_data, S, total_rows
+            );
+
+            // 4. Fused Masked Softmax (Now actually masked!)
+            int threads_per_block = 256;
+            int blocks_x = (S + threads_per_block - 1) / threads_per_block;
+            int blocks_y = B * H; // ONE BLOCK PER HEAD!
+            
+            dim3 grid(blocks_x, blocks_y);
+            dim3 block(threads_per_block);
+            float scale = 1.0f / sqrtf((float)Dk);
+            
+            masked_scaled_softmax_kernel<<<grid, block>>>(Attention_Scores->d_data, S, scale, B, H);
+
+            // 5. Batched Scores * V -> Context [B, H, S, Dk]
+            ops::strided_batched_matmul(Attention_Scores, V_transposed, Context_transposed, B, H, S, Dk, S, false, false);
+
+            // 6. Untranspose back to Token-Major [B, S, H, Dk]
+            dim3 grid_untrans( (H + 31) / 32, S, B );
+            untranspose_output_kernel<<<grid_untrans, 32>>>(Context_transposed->d_data, Context->d_data, B, H, S, Dk);
+
+            // 7. Final Output Projection
+            if (Y != nullptr) {
+                W_o->forward(Context, Y);
+            }
+        }        
     }
 
 
@@ -342,5 +518,19 @@ namespace layers {
         ops::add_tensors(dX, dX_q);
         ops::add_tensors(dX, dX_k);
         ops::add_tensors(dX, dX_v);
+    }
+
+    void MultiHeadAttention::enable_kv_cache(){
+        use_kv_cache = true;
+        current_cache_len = 0;
+    }
+
+    void MultiHeadAttention::disable_kv_cache(){
+        use_kv_cache = false;
+        current_cache_len = 0;
+    }
+
+    void MultiHeadAttention::clear_kv_cache(){
+        current_cache_len = 0;
     }
 }

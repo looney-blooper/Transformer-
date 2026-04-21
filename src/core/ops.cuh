@@ -14,4 +14,10 @@ namespace ops {
     void add_tensors(Tensor* A, Tensor* B);
 
     void strided_batched_matmul(Tensor* A, Tensor* B, Tensor* C, int b, int h, int m, int n, int k, bool transA, bool transB);
+
+    void strided_batched_matmul_kvcache(
+        Tensor* A, Tensor* B, Tensor* C, 
+        int b, int h, int m, int n, int k, 
+        bool transA, bool transB,
+        long long int strideA, long long int strideB, long long int strideC);
 }

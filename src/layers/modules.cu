@@ -195,17 +195,18 @@ __global__ void embedding_backward_kernel(float* dY, float* dWeight, int* input_
 // --------------------------------------------------------
 // ADD POSITIONAL ENCODING KERNEL
 // --------------------------------------------------------
-__global__ void add_pe_kernel(float* X, float* PE, int seq_len, int d_model, int batch_size) {
-    // Each thread handles one token's entire embedding vector
+__global__ void add_pe_kernel(float* X, float* PE, int seq_len, int d_model, int batch_size, int start_pos) {
     int b = blockIdx.y; 
     int pos = blockIdx.x * blockDim.x + threadIdx.x; 
 
     if (b < batch_size && pos < seq_len) {
         int x_offset = (b * seq_len * d_model) + (pos * d_model);
-        int pe_offset = pos * d_model; // PE is identical for every sequence in the batch
+        
+        // The Time-Shift happens right here:
+        int pe_offset = (pos + start_pos) * d_model; 
 
         for (int i = 0; i < d_model; i++) {
-            X[x_offset + i] += PE[pe_offset + i]; // In-place addition
+            X[x_offset + i] += PE[pe_offset + i]; 
         }
     }
 }
@@ -522,7 +523,7 @@ namespace layers {
         delete pe_matrix;
     }
 
-    void PositionalEncoding::forward(Tensor* X) {
+    void PositionalEncoding::forward(Tensor* X, int start_pos) {
         int batch_size = X->shape[0];
         int seq_len = X->shape[1];
 
@@ -533,6 +534,13 @@ namespace layers {
         dim3 grid(blocks_x, blocks_y);
         dim3 block(threads_per_block);
 
-        add_pe_kernel<<<grid, block>>>(X->d_data, pe_matrix->d_data, seq_len, d_model, batch_size);
+        add_pe_kernel<<<grid, threads_per_block>>>(
+            X->d_data, 
+            pe_matrix->d_data, 
+            seq_len, 
+            d_model, 
+            batch_size, 
+            start_pos
+        );
     }
 }

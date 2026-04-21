@@ -54,6 +54,18 @@ int greedy_argmax(Tensor* logits, int token_index, int vocab_size) {
     return best_id;
 }
 
+int get_argmax(Tensor* logits, int vocab_size) {
+    int best_token = 0;
+    float max_prob = -1e20f;
+    for (int v = 0; v < vocab_size; v++) {
+        if (logits->h_data[v] > max_prob) {
+            max_prob = logits->h_data[v];
+            best_token = v;
+        }
+    }
+    return best_token;
+}
+
 int main() {
     std::cout << "==================================================" << std::endl;
     std::cout << ">>> IGNITING C++ TRANSFORMER ENGINE <<<" << std::endl;
@@ -73,8 +85,6 @@ int main() {
     initialize_model_weights(gpt);
     layers::CrossEntropyLoss criterion;
     core::AdamW optimizer(gpt.parameters(), 0.003f, 0.9f, 0.999f, 0.0f);
-
-    initialize_model_weights(gpt);
 
     std::cout << "\n=== DEBUG: POSITIONAL ENCODING VRAM PROBE ===" << std::endl;
     // 1. Pull the PE matrix back from the GPU to the CPU
@@ -126,43 +136,58 @@ int main() {
         }
     }
 
-    // --- PHASE 2: INFERENCE (AUTOREGRESSIVE GENERATION) ---
+   // ==============================================================================
+    // PHASE 2: AUTOREGRESSIVE INFERENCE (O(1) KV-Cache)
+    // ==============================================================================
     std::cout << "\n==================================================" << std::endl;
     std::cout << "Phase 2: Autoregressive Inference" << std::endl;
-    std::cout << "==================================================" << std::endl;
+    std::cout << "==================================================\n" << std::endl;
 
-    // We give the model exactly ONE word to start with: "The" (45). 
-    // We pad the rest of the array with 0s.
-    int context[4] = {45, 0, 0, 0}; 
-    int current_len = 1;
+    // 1. FLIP THE MASTER SWITCH: Turn on the VRAM state-preservation
+    gpt.enable_kv_cache();
 
-    std::cout << "\nPrompt: [ 45 ] (\"The\")" << std::endl;
-    std::cout << "AI Generating: ";
+    // 2. The Initial Prompt State
+    int current_token_id = 45; // "The"
+    std::cout << "Prompt: [ " << current_token_id << " ] (\"The\")\nAI Generating: ";
 
-    // We will ask the model to predict the next 3 words
-    for(int step = 0; step < 3; step++) {
-        // 1. Push current context to GPU
-        cudaMemcpy(d_input_ids, context, max_seq_len * sizeof(int), cudaMemcpyHostToDevice);
+    // 3. Allocate a tiny integer pointer on the GPU for generating ONE token at a time
+    int* d_single_input_id;
+    cudaMalloc(&d_single_input_id, 1 * sizeof(int));
+    
+    Tensor single_logits({1, 1, vocab_size});
 
-        // 2. Run Forward Pass
-        gpt.forward(d_input_ids, &Logits);
+    // 4. Generate the next 3 tokens
+    for (int step = 0; step < 3; step++) {
+        
+        // Push ONLY the newest integer token to the GPU
+        cudaMemcpy(d_single_input_id, &current_token_id, sizeof(int), cudaMemcpyHostToDevice);
 
-        // 3. Extract the prediction for the LAST word we just fed it
-        // If current_len is 1, we want the prediction from index 0.
-        int predicted_id = greedy_argmax(&Logits, current_len - 1, vocab_size);
+        // Forward pass using the raw int pointer:
+        // - Calculates Q, K, V for this ONE token.
+        // - Appends K and V to the physical VRAM cache.
+        // - Matrix Multiplies Q against the ENTIRE historical cache.
+        gpt.forward(d_single_input_id, &single_logits);
+        single_logits.to_host();
 
-        // Print the predicted word ID
-        std::cout << "[ " << predicted_id << " ] ";
+        // Decode the output 
+        int next_token_id = get_argmax(&single_logits, vocab_size);
+        
+        std::cout << "[ " << next_token_id << " ] " << std::flush;
 
-        // 4. Append the prediction to our context for the next loop!
-        context[current_len] = predicted_id;
-        current_len++;
+        // The AI's prediction becomes the input reality for the next time step
+        current_token_id = next_token_id;
     }
-    std::cout << "\n\n>>> ENGINE COMPLETED SUCCESSFULLY <<<" << std::endl;
 
+    std::cout << "\n\nInference Complete." << std::endl;
+
+    // ==============================================================================
+    // CLEANUP
+    // ==============================================================================
     cudaFree(d_input_ids);
     cudaFree(d_targets);
+    cudaFree(d_single_input_id);
+    gpt.disable_kv_cache();
     ops::destroy_cublas();
-    
+
     return 0;
 }

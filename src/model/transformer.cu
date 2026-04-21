@@ -34,26 +34,23 @@ namespace model {
         delete d_attn_out;
     }
 
-    void DecoderBlock::forward(Tensor* X){
-        // --- SUBLAYER 1: ATTENTION ---
-        // 1. Pre-Norm: norm_cache = LayerNorm(X)
+    void DecoderBlock::forward(Tensor* X) {
+        // 1. Synchronize the internal caches to the input throttle!
+        int seq_len = X->shape[1];
+        int dynamic_size = X->size;
+
+        norm_cache_1->shape[1] = seq_len; norm_cache_1->size = dynamic_size;
+        attn_out->shape[1] = seq_len;     attn_out->size = dynamic_size;
+        norm_cache_2->shape[1] = seq_len; norm_cache_2->size = dynamic_size;
+        ffn_out->shape[1] = seq_len;      ffn_out->size = dynamic_size;
+
+        // 2. Standard Forward Pass
         ln1->forward(X, norm_cache_1);
-
-        // 2. Attention: attn_out = MHA(norm_cache)
         mha->forward(norm_cache_1, attn_out);
-
-        // 3. Residual 1: X = X + attn_out
         ops::add_tensors(X, attn_out);
 
-        // --- SUBLAYER 2: FEED-FORWARD ---
-        // 4. Pre-Norm: norm_cache = LayerNorm(X) 
-        // (We safely overwrite the old norm_cache to save VRAM!)
         ln2->forward(X, norm_cache_2);
-
-        // 5. FFN: ffn_out = FFN(norm_cache)
         ffn->forward(norm_cache_2, ffn_out);
-
-        // 6. Residual 2: X = X + ffn_out
         ops::add_tensors(X, ffn_out);
     }
 
@@ -78,5 +75,15 @@ namespace model {
         
         // 6. Residual 1: Add the sublayer gradient back into the main stream
         ops::add_tensors(dX, d_attn_out);
+    }
+
+    void DecoderBlock::enable_kv_cache() { 
+        mha->enable_kv_cache(); 
+    }
+    void DecoderBlock::disable_kv_cache() {
+         mha->disable_kv_cache(); 
+    }
+    void DecoderBlock::clear_kv_cache() { 
+        mha->clear_kv_cache();
     }
 }

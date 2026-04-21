@@ -97,4 +97,26 @@ namespace ops {
             b * h // Total batches = Batch size * Number of heads
         );
     }
+    void strided_batched_matmul_kvcache(
+        Tensor* A, Tensor* B, Tensor* C, 
+        int b, int h, int m, int n, int k, 
+        bool transA, bool transB,
+        long long int strideA, long long int strideB, long long int strideC) 
+    {
+        float alpha = 1.0f;
+        float beta = 0.0f;
+
+        cublasSgemmStridedBatched(
+            handle,
+            transB ? CUBLAS_OP_T : CUBLAS_OP_N,
+            transA ? CUBLAS_OP_T : CUBLAS_OP_N,
+            n, m, k,
+            &alpha,
+            B->d_data, transB ? k : n, strideB,
+            A->d_data, transA ? m : k, strideA,
+            &beta,
+            C->d_data, n, strideC,
+            b * h 
+        );
+    }
 }

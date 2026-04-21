@@ -8,6 +8,7 @@ namespace layers {
         int d_model;
         int num_heads;
         int d_k;
+        int max_seq_len;
 
         Linear* W_q;
         Linear* W_k;
@@ -52,5 +53,23 @@ namespace layers {
 
         void forward(Tensor* X, Tensor* Y);
         void backward(Tensor* dY, Tensor* dX);
+
+
+        // ==========================================
+        // KV-CACHE MEMORY BUFFERS
+        // ==========================================
+        bool use_kv_cache;      // Toggle switch for Training vs Inference
+        int current_cache_len;  // Tracks how many tokens are currently stored
+
+        // Persistent pre-allocated memory for the historical sequence
+        // Shape: [batch_size, num_heads, max_seq_len, d_k]
+        Tensor* K_cache;
+        Tensor* V_cache;
+
+        void enable_kv_cache();
+        void disable_kv_cache();
+        void clear_kv_cache();
+
+        Tensor* Inference_Scores;
     };
 }

@@ -112,6 +112,6 @@ namespace layers {
         ~PositionalEncoding();
 
         // Adds the positional encodings IN-PLACE to the embedded tensor X
-        void forward(Tensor* X);
+        void forward(Tensor* X, int start_pos = 0);
     };
 }

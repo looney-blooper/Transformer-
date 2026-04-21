@@ -30,5 +30,9 @@ namespace model {
 
         void forward(Tensor* X);
         void backward(Tensor* dX);
+
+        void enable_kv_cache();
+        void disable_kv_cache();
+        void clear_kv_cache();
     };
 }

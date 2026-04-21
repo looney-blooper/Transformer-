@@ -41,5 +41,10 @@ namespace model {
         void backward(Tensor* dLogits);
 
         std::vector<Tensor*> parameters();
+
+
+        void enable_kv_cache();
+        void disable_kv_cache();
+        void clear_kv_cache();
     };
 }

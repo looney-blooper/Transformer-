@@ -39,25 +39,45 @@ namespace model {
         delete d_hidden_state;
     }
 
-    void GPT::forward(int* d_input_ids, Tensor* logits){
-        int total_tokens = batch_size * max_seq_len;
+    void GPT::forward(int* d_input_ids, Tensor* logits) {
+        int batch_size = logits->shape[0];
+        int seq_len = logits->shape[1];
+        int total_tokens = batch_size * seq_len;
 
-        // Step 1: Token Embeddings (Vocab IDs -> Float Vectors)
+        // ==========================================
+        // THE ENGINE THROTTLE
+        // ==========================================
+        int original_seq = hidden_state->shape[1];
+        int original_size = hidden_state->size;
+        
+        // Shrink the physical dimensions for inference
+        hidden_state->shape[1] = seq_len;
+        hidden_state->size = total_tokens * tok_emb->d_model; // Assuming your emb layer holds d_model
+
+        // 1. Embeddings
         tok_emb->forward(d_input_ids, hidden_state, total_tokens);
 
-        // Step 2: Add Positional Encodings (In-place addition)
-        pos_emb->forward(hidden_state);
+        // 2. Time-Shift
+        int start_pos = 0;
+        if (blocks[0]->mha->use_kv_cache) {
+            start_pos = blocks[0]->mha->current_cache_len;
+        }
+        pos_emb->forward(hidden_state, start_pos);
 
-        // Step 3: Pass through all N Decoder Blocks
-        for (int i = 0; i < num_layers; i++) {
-            blocks[i]->forward(hidden_state);
+        // 3. Deep Neural Network
+        for (auto block : blocks) {
+            block->forward(hidden_state);
         }
 
-        // Step 4: Final Layer Normalization (In-place to save memory)
+        // 4. Output
         final_ln->forward(hidden_state, hidden_state);
+        lm_head->forward(hidden_state, logits); // Will now safely write exactly 1 row!
 
-        // Step 5: Language Model Head Projection (Hidden -> Vocab Size)
-        lm_head->forward(hidden_state, logits);
+        // ==========================================
+        // RESTORE DIMENSIONS
+        // ==========================================
+        hidden_state->shape[1] = original_seq;
+        hidden_state->size = original_size;
     }
 
     void GPT::backward(Tensor* dLogits){
@@ -123,5 +143,21 @@ namespace model {
         params.push_back(lm_head->b);
 
         return params;
+    }
+
+    void GPT::enable_kv_cache() {
+        for (auto block : blocks) {
+            block->enable_kv_cache();
+        }
+    }
+    void GPT::disable_kv_cache() {
+        for (auto block : blocks) {
+            block->disable_kv_cache();
+        }
+    }
+    void GPT::clear_kv_cache() {
+        for (auto block : blocks) {
+            block->clear_kv_cache();
+        }
     }
 }
