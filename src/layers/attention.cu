@@ -3,18 +3,54 @@
 #include <iostream>
 #include <cmath>
 
+// [Batch, Seq, Heads, Dk] -> [Batch, Heads, Seq, Dk]
+__global__ void transpose_qkv_kernel(float* src, float* dst, int batch, int seq, int heads, int d_k) {
+    int b = blockIdx.z;
+    int h = blockIdx.y;
+    int s = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (s < seq) {
+        for (int d = 0; d < d_k; d++) {
+            // Original index in [B, S, H, Dk]
+            int src_idx = (b * seq * heads * d_k) + (s * heads * d_k) + (h * d_k) + d;
+            // Target index in [B, H, S, Dk]
+            int dst_idx = (b * heads * seq * d_k) + (h * seq * d_k) + (s * d_k) + d;
+            dst[dst_idx] = src[src_idx];
+        }
+    }
+}
+
+// [Batch, Heads, Seq, Dk] -> [Batch, Seq, Heads, Dk]
+__global__ void untranspose_output_kernel(float* src, float* dst, int batch, int heads, int seq, int d_k) {
+    int b = blockIdx.z;
+    int s = blockIdx.y;
+    int h = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (h < heads) {
+        for (int d = 0; d < d_k; d++) {
+            // Original index in [B, H, S, Dk]
+            int src_idx = (b * heads * seq * d_k) + (h * seq * d_k) + (s * d_k) + d;
+            // Target index in [B, S, H, Dk]
+            int dst_idx = (b * seq * heads * d_k) + (s * heads * d_k) + (h * d_k) + d;
+            dst[dst_idx] = src[src_idx];
+        }
+    }
+}
+
 // --------------------------------------------------------
 // FUSED CAUSAL-MASKED SCALED-SOFTMAX KERNEL
 // --------------------------------------------------------
-__global__ void masked_scaled_softmax_kernel(float* attn_scores, int seq_len, float scale, int batch_size) {
-    // Each thread block handles one sequence in the batch
-    // Each thread handles one row (Query) inside that sequence's N x N matrix
-    int b = blockIdx.y; 
+__global__ void masked_scaled_softmax_kernel(float* attn_scores, int seq_len, float scale, int batch_size, int num_heads) {
+    
+    // We treat (batch * head) as a single flat "z-axis" dimension
+    int batch_head_idx = blockIdx.y; 
     int row = blockIdx.x * blockDim.x + threadIdx.x; 
+    
+    int total_matrices = batch_size * num_heads;
 
-    if (b < batch_size && row < seq_len) {
-        // Calculate the starting index of this specific row in the flattened 1D memory array
-        int row_offset = (b * seq_len * seq_len) + (row * seq_len);
+    if (batch_head_idx < total_matrices && row < seq_len) {
+        // Calculate the starting index of this specific row, accounting for WHICH head we are in!
+        int row_offset = (batch_head_idx * seq_len * seq_len) + (row * seq_len);
 
         // Step 1: Scale, Mask, and find Max
         float max_val = -1e20f; 
@@ -94,13 +130,15 @@ __global__ void scaled_softmax_kernel(float* attn_scores, int seq_len, float sca
 // --------------------------------------------------------
 // MASKED SCALED-SOFTMAX BACKWARD KERNEL
 // --------------------------------------------------------
-__global__ void masked_softmax_backward_kernel(float* dP, float* P, int seq_len, float scale, int batch_size) {
-    // b = batch index, row = token query index
-    int b = blockIdx.y; 
+__global__ void masked_softmax_backward_kernel(float* dP, float* P, int seq_len, float scale, int batch_size, int num_heads) {
+    // Treat (batch * head) as a single flat "y-axis" dimension
+    int batch_head_idx = blockIdx.y; 
     int row = blockIdx.x * blockDim.x + threadIdx.x; 
+    
+    int total_matrices = batch_size * num_heads;
 
-    if (b < batch_size && row < seq_len) {
-        int row_offset = (b * seq_len * seq_len) + (row * seq_len);
+    if (batch_head_idx < total_matrices && row < seq_len) {
+        int row_offset = (batch_head_idx * seq_len * seq_len) + (row * seq_len);
 
         // Step 1: Calculate the dot product of (P * dP) for this row
         float sum_p_dp = 0.0f;
@@ -117,7 +155,7 @@ __global__ void masked_softmax_backward_kernel(float* dP, float* P, int seq_len,
             dP[row_offset + col] = scale * p_val * (dp_val - sum_p_dp);
         }
 
-        // Step 3: Zero out the causally masked future just to be perfectly safe
+        // Step 3: Zero out the causally masked future
         for (int col = row + 1; col < seq_len; col++) {
             dP[row_offset + col] = 0.0f;
         }
@@ -135,16 +173,14 @@ namespace layers {
         W_v = new Linear(d_model, d_model);
         W_o = new Linear(d_model, d_model);
 
-        // FIX 1: Q, K, V must hold the entire sequence! 
-        // Shape: [batch_size, max_seq_len, d_model]
+        // --- 1. QKV Interleaved (Token-Major) ---
         std::vector<int> qkv_shape = {batch_size, max_seq_len, d_model};
+        
         Q = new Tensor(qkv_shape);
         K = new Tensor(qkv_shape);
         V = new Tensor(qkv_shape);
-        Context = new Tensor(qkv_shape); // Context output has the same shape
+        Context = new Tensor(qkv_shape);
 
-
-        //Gradients
         dQ = new Tensor(qkv_shape);
         dK = new Tensor(qkv_shape);
         dV = new Tensor(qkv_shape);
@@ -154,13 +190,24 @@ namespace layers {
         dX_k = new Tensor(qkv_shape);
         dX_v = new Tensor(qkv_shape);
 
+        // --- 2. QKV Transposed (Head-Major) ---
+        // CRITICAL: If any of these are missing, the kernels will Segfault!
+        Q_transposed = new Tensor(qkv_shape);
+        K_transposed = new Tensor(qkv_shape);
+        V_transposed = new Tensor(qkv_shape);
+        Context_transposed = new Tensor(qkv_shape);
 
-        // FIX 2: Attention Scores must be an N x N matrix per batch
-        // Shape: [batch_size, max_seq_len, max_seq_len]
-        std::vector<int> attn_shape = {batch_size, max_seq_len, max_seq_len};
+        dQ_transposed = new Tensor(qkv_shape);
+        dK_transposed = new Tensor(qkv_shape);
+        dV_transposed = new Tensor(qkv_shape);
+        dContext_transposed = new Tensor(qkv_shape);
+
+        // --- 3. Attention Matrices (Batched across Heads) ---
+        // CRITICAL: This shape MUST include num_heads to hold the 64 floats!
+        std::vector<int> attn_shape = {batch_size, num_heads, max_seq_len, max_seq_len};
+        
         Attention_Scores = new Tensor(attn_shape);
-
-        dAttention_Scores = new Tensor(attn_shape);
+        dAttention_Scores = new Tensor(attn_shape); // Backward pass needs room too!
     }
 
     MultiHeadAttention::~MultiHeadAttention(){
@@ -182,110 +229,116 @@ namespace layers {
         delete dX_v;
         delete dAttention_Scores;
         delete dContext;
+
+        delete Q_transposed;
+        delete K_transposed;
+        delete V_transposed;
+        delete Context_transposed;
+
+        delete dQ_transposed;
+        delete dK_transposed;
+        delete dV_transposed;
+        delete dContext_transposed;
     }
 
-    void MultiHeadAttention::forward(Tensor* X, Tensor* Y){
-        int batch_size = X->shape[0];
-        
-        // Step 1: Calculate Q, K, V using our Linear layers
+    void MultiHeadAttention::forward(Tensor* X, Tensor* Y) {
+        int B = X->shape[0];
+        int S = X->shape[1];
+        int H = num_heads;
+        int Dk = d_model / H;
+
+        // 1. Initial Projections (Linear) -> Output is Interleaved
         W_q->forward(X, Q);
         W_k->forward(X, K);
         W_v->forward(X, V);
 
-        // Step 2: Calculate Attention Scores (Q * K^T)
-        // transB = true tells cuBLAS to transpose K on the fly
-        ops::matmul(Q, K, Attention_Scores, false, true);
+        // 2. Transpose to Head-Major [B, H, S, Dk]
+        dim3 grid_trans( (S + 31) / 32, H, B );
+        transpose_qkv_kernel<<<grid_trans, 32>>>(Q->d_data, Q_transposed->d_data, B, S, H, Dk);
+        transpose_qkv_kernel<<<grid_trans, 32>>>(K->d_data, K_transposed->d_data, B, S, H, Dk);
+        transpose_qkv_kernel<<<grid_trans, 32>>>(V->d_data, V_transposed->d_data, B, S, H, Dk);
 
-        /// Setup Grid for [batch_size, seq_len, seq_len]
-        int seq_len = Attention_Scores->shape[1]; // e.g., 128
-        float scale = 1.0f / sqrtf((float)d_k);
+        // 3. Batched QK^T -> Scores [B, H, S, S]
+        ops::strided_batched_matmul(Q_transposed, K_transposed, Attention_Scores, B, H, S, S, Dk, false, true);
 
-        int threads_per_block = 128; // One thread per row in the seq_len
-        int blocks_x = (seq_len + threads_per_block - 1) / threads_per_block;
-        int blocks_y = batch_size; // One block grid per batch
-
-        dim3 gridDim(blocks_x, blocks_y);
-        dim3 blockDim(threads_per_block);
-
-        masked_scaled_softmax_kernel<<<gridDim, blockDim>>>(
-            Attention_Scores->d_data, 
-            seq_len, 
-            scale, 
-            batch_size
-        );
-
-        // Check for Softmax kernel errors
-        cudaError_t err = cudaGetLastError();
-        if (err != cudaSuccess) {
-            std::cerr << "Softmax Kernel Failed: " << cudaGetErrorString(err) << std::endl;
-            exit(EXIT_FAILURE);
-        }
-
-        // Step 5: Multiply by V (Context = Attention_Scores * V)
-        // Attention_Scores is [seq_len, seq_len], V is [seq_len, d_model]
-        // Result Context is [seq_len, d_model]
-        ops::matmul(Attention_Scores, V, Context);
+        // 4. Fused Masked Softmax 
+        int threads_per_block = 256;
+        int blocks_x = (S + threads_per_block - 1) / threads_per_block;
+        int blocks_y = B * H; // ONE BLOCK PER HEAD!
         
-        // Step 6: Final output projection (Y = Context * W_o)
-        // Context is [seq_len, d_model], W_o is [d_model, d_model]
-        // Result Y is [seq_len, d_model]
+        dim3 grid(blocks_x, blocks_y);
+        dim3 block(threads_per_block);
+        float scale = 1.0f / sqrtf((float)Dk);
+        
+        masked_scaled_softmax_kernel<<<grid, block>>>(Attention_Scores->d_data, S, scale, B, H);
+
+        // 5. Batched Scores * V -> Context [B, H, S, Dk]
+        ops::strided_batched_matmul(Attention_Scores, V_transposed, Context_transposed, B, H, S, Dk, S, false, false);
+
+        // 6. Untranspose back to Token-Major [B, S, H, Dk]
+        dim3 grid_untrans( (H + 31) / 32, S, B );
+        untranspose_output_kernel<<<grid_untrans, 32>>>(Context_transposed->d_data, Context->d_data, B, H, S, Dk);
+
+        // 7. Final Output Projection
         if (Y != nullptr) {
             W_o->forward(Context, Y);
         }
     }
 
 
-    void MultiHeadAttention::backward(Tensor* dY, Tensor* dX){
-        int batch_size = Q->shape[0];
-        int seq_len = Q->shape[1];
+    void MultiHeadAttention::backward(Tensor* dY, Tensor* dX) {
+        int B = Q->shape[0];
+        int S = Q->shape[1];
+        int H = num_heads;
+        int Dk = d_model / H;
 
-        // 1. Backprop through the Output Projection (W_o)
-        // dContext = dY * W_o^T
+        // 1. Backprop through the Output Projection (W_o) -> Outputs interleaved dContext
         W_o->backward(dY, dContext);
 
-        // 2. Backprop through the (Scores * V) multiplication
-        // dV = Scores^T * dContext (Note: Transpose A!)
-        ops::matmul(Attention_Scores, dContext, dV, true, false);
+        // 2. Transpose dContext into Head-Major so it aligns with our batched math!
+        dim3 grid_trans( (S + 31) / 32, H, B );
+        transpose_qkv_kernel<<<grid_trans, 32>>>(dContext->d_data, dContext_transposed->d_data, B, S, H, Dk);
 
-        // dScores = dContext * V^T (Note: Transpose B!)
-        ops::matmul(dContext, V, dAttention_Scores, false, true);
+        // 3. Backprop through the (Scores * V) multiplication (Batched!)
+        // dV_transposed = Scores^T * dContext_transposed
+        ops::strided_batched_matmul(Attention_Scores, dContext_transposed, dV_transposed, B, H, S, Dk, S, true, false);
 
-        // 3. Backprop through the Causal Softmax
-        float scale = 1.0f / sqrtf((float)d_k);
+        // dScores = dContext_transposed * V_transposed^T
+        ops::strided_batched_matmul(dContext_transposed, V_transposed, dAttention_Scores, B, H, S, S, Dk, false, true);
+
+        // 4. Backprop through the Causal Softmax (Batched!)
+        float scale = 1.0f / sqrtf((float)Dk);
         int threads_per_block = 128;
-        int blocks_x = (seq_len + threads_per_block - 1) / threads_per_block;
-        int blocks_y = batch_size;
+        int blocks_x = (S + threads_per_block - 1) / threads_per_block;
+        int blocks_y = B * H; // ONE BLOCK PER HEAD!
 
         dim3 gridDim(blocks_x, blocks_y);
         dim3 blockDim(threads_per_block);
 
         masked_softmax_backward_kernel<<<gridDim, blockDim>>>(
-            dAttention_Scores->d_data, // acts as dP input, overwritten to become dS output
-            Attention_Scores->d_data,  // forward probabilities P
-            seq_len, 
-            scale, 
-            batch_size
+            dAttention_Scores->d_data, Attention_Scores->d_data, S, scale, B, H
         );
 
-        // 4. Backprop through the (Q * K^T) multiplication
-        // dQ = dScores * K
-        ops::matmul(dAttention_Scores, K, dQ, false, false);
+        // 5. Backprop through the (Q * K^T) multiplication (Batched!)
+        // dQ_transposed = dScores * K_transposed
+        ops::strided_batched_matmul(dAttention_Scores, K_transposed, dQ_transposed, B, H, S, Dk, S, false, false);
         
-        // dK = dScores^T * Q (Note: Transpose A!)
-        ops::matmul(dAttention_Scores, Q, dK, true, false);
+        // dK_transposed = dScores^T * Q_transposed
+        ops::strided_batched_matmul(dAttention_Scores, Q_transposed, dK_transposed, B, H, S, Dk, S, true, false);
 
-        // 5. Backprop through the Q, K, V Linear Projections
+        // 6. Untranspose the gradients back to Token-Major (Interleaved)
+        dim3 grid_untrans( (H + 31) / 32, S, B );
+        untranspose_output_kernel<<<grid_untrans, 32>>>(dQ_transposed->d_data, dQ->d_data, B, H, S, Dk);
+        untranspose_output_kernel<<<grid_untrans, 32>>>(dK_transposed->d_data, dK->d_data, B, H, S, Dk);
+        untranspose_output_kernel<<<grid_untrans, 32>>>(dV_transposed->d_data, dV->d_data, B, H, S, Dk);
+
+        // 7. Backprop through the Linear Projections
         W_q->backward(dQ, dX_q);
         W_k->backward(dK, dX_k);
         W_v->backward(dV, dX_v);
 
-        // 6. Accumulate the final gradient for X
-        // Because the input X split into three paths (Q, K, V), the chain rule 
-        // dictates we must sum their gradients together to get the total dX.
-        
-        // First, zero out dX since we are going to accumulate into it
+        // 8. Accumulate final gradient
         cudaMemset(dX->d_data, 0, dX->size * sizeof(float));
-
         ops::add_tensors(dX, dX_q);
         ops::add_tensors(dX, dX_k);
         ops::add_tensors(dX, dX_v);

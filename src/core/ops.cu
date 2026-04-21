@@ -74,4 +74,27 @@ namespace ops {
 
         add_tensors_kernel<<<blocks, threads_per_block>>>(A->d_data, B->d_data, A->size);
     }
+
+    void strided_batched_matmul(Tensor* A, Tensor* B, Tensor* C, int b, int h, int m, int n, int k, bool transA, bool transB) {
+        float alpha = 1.0f;
+        float beta = 0.0f;
+
+        // Strides tell cuBLAS how far to jump to reach the next head
+        long long int strideA = m * k;
+        long long int strideB = k * n;
+        long long int strideC = m * n;
+
+        cublasSgemmStridedBatched(
+            handle,
+            transB ? CUBLAS_OP_T : CUBLAS_OP_N,
+            transA ? CUBLAS_OP_T : CUBLAS_OP_N,
+            n, m, k,
+            &alpha,
+            B->d_data, transB ? k : n, strideB,
+            A->d_data, transA ? m : k, strideA,
+            &beta,
+            C->d_data, n, strideC,
+            b * h // Total batches = Batch size * Number of heads
+        );
+    }
 }

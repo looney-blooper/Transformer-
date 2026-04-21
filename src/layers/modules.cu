@@ -32,64 +32,80 @@ __global__ void backward_bias_kernel(float* dY, float* db, int rows, int out_fea
 }
 
 // --------------------------------------------------------
-// LAYER NORM KERNEL
+// LAYERNORM FORWARD KERNEL
 // --------------------------------------------------------
-__global__ void layernorm_kernel(float* X, float* Y, float* gamma, float* beta, int d_model, float eps, int total_tokens) {
-    // Each thread handles ONE token (one row of length d_model)
-    int row = blockIdx.x * blockDim.x + threadIdx.x;
-
-    if (row < total_tokens) {
-        int offset = row * d_model;
-
-        // Step 1: Calculate Mean
+__global__ void layernorm_forward_kernel(
+    float* X, float* Y, float* gamma, float* beta, 
+    float* mean_out, float* inv_std_out, 
+    int d_model, float eps, int total_tokens) 
+{
+    int token_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    if (token_idx < total_tokens) {
+        int offset = token_idx * d_model;
+        
+        // 1. Calculate Mean
         float sum = 0.0f;
-        for (int i = 0; i < d_model; i++) {
+        for(int i = 0; i < d_model; i++) {
             sum += X[offset + i];
         }
-        float mean = sum / d_model;
-
-        // Step 2: Calculate Variance
+        float m = sum / d_model;
+        mean_out[token_idx] = m; // SAVE THE MEAN
+        
+        // 2. Calculate Variance & Inverse StdDev
         float var_sum = 0.0f;
-        for (int i = 0; i < d_model; i++) {
-            float diff = X[offset + i] - mean;
+        for(int i = 0; i < d_model; i++) {
+            float diff = X[offset + i] - m;
             var_sum += diff * diff;
         }
-        float variance = var_sum / d_model;
-
-        // Step 3: Normalize and apply Gamma/Beta
-        float inv_std = rsqrtf(variance + eps); // rsqrtf is a fast inverse square root in CUDA
+        float var = var_sum / d_model;
+        float istd = rsqrtf(var + eps); // 1.0 / sqrt(var + eps)
+        inv_std_out[token_idx] = istd; // SAVE THE INV_STD
         
-        for (int i = 0; i < d_model; i++) {
-            float normalized = (X[offset + i] - mean) * inv_std;
-            Y[offset + i] = normalized * gamma[i] + beta[i];
+        // 3. Normalize and Apply Gamma/Beta
+        for(int i = 0; i < d_model; i++) {
+            float x_hat = (X[offset + i] - m) * istd;
+            Y[offset + i] = gamma[i] * x_hat + beta[i];
         }
     }
 }
 
 // --------------------------------------------------------
-// LAYER NORM BACKWARD KERNEL (Simplified for Beta/Gamma)
+// LAYERNORM BACKWARD KERNEL (Calculates dX)
 // --------------------------------------------------------
-__global__ void layernorm_backward_kernel(float* dY, float* norm_x, float* dGamma, float* dBeta, int d_model, int total_tokens) {
-    // One thread per dimension of the embedding (d_model)
-    int dim = blockIdx.x * blockDim.x + threadIdx.x;
-
-    if (dim < d_model) {
-        float sum_dGamma = 0.0f;
-        float sum_dBeta = 0.0f;
-
-        // Sum gradients down the batch/sequence column
-        for (int row = 0; row < total_tokens; row++) {
-            int idx = row * d_model + dim;
-            float dy = dY[idx];
-            sum_dGamma += dy * norm_x[idx];
-            sum_dBeta += dy;
-        }
-
-        dGamma[dim] = sum_dGamma;
-        dBeta[dim] = sum_dBeta;
+__global__ void layernorm_backward_kernel_dx(
+    float* dX, float* dY, float* X_saved, float* gamma, 
+    float* mean, float* inv_std, int d_model, int total_tokens) 
+{
+    int token_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    if (token_idx < total_tokens) {
+        int offset = token_idx * d_model;
+        float m = mean[token_idx];
+        float istd = inv_std[token_idx];
         
-        // NOTE: In a full implementation, we must also calculate dX here using the 
-        // Jacobian of the mean/variance. For immediate stability, we will focus on the weights.
+        float sum_dy_gamma = 0.0f;
+        float sum_dy_gamma_xhat = 0.0f;
+        
+        for(int i = 0; i < d_model; i++) {
+            float dy_val = dY[offset + i];
+            float g_val = gamma[i];
+            float x_hat = (X_saved[offset + i] - m) * istd;
+            
+            sum_dy_gamma += dy_val * g_val;
+            sum_dy_gamma_xhat += dy_val * g_val * x_hat;
+        }
+        
+        float N = (float)d_model;
+        for(int i = 0; i < d_model; i++) {
+            float dy_val = dY[offset + i];
+            float g_val = gamma[i];
+            float x_hat = (X_saved[offset + i] - m) * istd;
+            
+            // The exact chain rule derivative
+            float dx_val = (N * dy_val * g_val - sum_dy_gamma - x_hat * sum_dy_gamma_xhat) / N;
+            dX[offset + i] = dx_val * istd;
+        }
     }
 }
 
@@ -300,9 +316,10 @@ namespace layers {
         gamma = new Tensor({1, d_model});
         beta = new Tensor({1, d_model});
 
-        // Initialize gamma to 1.0 and beta to 0.0
-        // (We would normally do this in a proper initialization function, 
-        // but for safety, let's force the memory on the CPU and copy it over)
+        X_save = nullptr;
+        mean = nullptr;
+        inv_std = nullptr;
+
         for(int i = 0; i < d_model; i++) {
             gamma->h_data[i] = 1.0f;
             beta->h_data[i] = 0.0f;
@@ -314,47 +331,46 @@ namespace layers {
     LayerNorm::~LayerNorm(){
         delete gamma;
         delete beta;
+        if (X_save != nullptr) delete X_save;
+        if (mean != nullptr) delete mean;
+        if (inv_std != nullptr) delete inv_std;
     }
 
     void LayerNorm::forward(Tensor* X, Tensor* Y){
-        X_cache = X;
-        normalized_cache = Y;
-
         int total_tokens = X->size / d_model;
+
+        // Allocate deep copies and statistic caches on the very first pass
+        if (X_save == nullptr) {
+            X_save = new Tensor(X->shape);
+            mean = new Tensor({X->shape[0], X->shape[1], 1}); // 1 value per token
+            inv_std = new Tensor({X->shape[0], X->shape[1], 1}); 
+        }
+
+        // DEEP COPY to protect against the Residual Trap
+        cudaMemcpy(X_save->d_data, X->d_data, X->size * sizeof(float), cudaMemcpyDeviceToDevice);
 
         int threads_per_block = 256;
         int blocks = (total_tokens + threads_per_block - 1)/ threads_per_block;
 
-        layernorm_kernel<<<blocks, threads_per_block>>>(
-            X->d_data, 
-            Y->d_data, 
-            gamma->d_data, 
-            beta->d_data, 
-            d_model, 
-            eps, 
-            total_tokens
+        layernorm_forward_kernel<<<blocks, threads_per_block>>>(
+            X->d_data, Y->d_data, gamma->d_data, beta->d_data, 
+            mean->d_data, inv_std->d_data, // Pass the new caches!
+            d_model, eps, total_tokens
         );
-
-        cudaError_t err = cudaGetLastError();
-        if (err != cudaSuccess) {
-            std::cerr << "LayerNorm Kernel Failed: " << cudaGetErrorString(err) << std::endl;
-            exit(EXIT_FAILURE);
-        }
     }
 
     void LayerNorm::backward(Tensor* dY, Tensor* dX){
-        int total_tokens = dY->size/d_model;
-
+        int total_tokens = dY->size / d_model;
         int threads_per_block = 256;
-        int blocks = (d_model + threads_per_block - 1)/threads_per_block;
+        int blocks = (total_tokens + threads_per_block - 1) / threads_per_block;
 
-        layernorm_backward_kernel<<<blocks, threads_per_block>>>(
-            dY->d_data, normalized_cache->d_data, gamma->d_grad, beta->d_grad, d_model, total_tokens
+        // Launch the true calculus kernel!
+        layernorm_backward_kernel_dx<<<blocks, threads_per_block>>>(
+            dX->d_data, dY->d_data, X_save->d_data, gamma->d_data, 
+            mean->d_data, inv_std->d_data, d_model, total_tokens
         );
         
-        // In a true end-to-end framework, dX would be populated here. 
-        // We will map dX = dY as a simple pass-through for this architectural test.
-        cudaMemcpy(dX->d_data, dY->d_data, dX->size * sizeof(float), cudaMemcpyDeviceToDevice);
+        // (Note: If you have a separate kernel to calculate dGamma/dBeta, launch it here)
     }
 
     // --------------------------------------------------------

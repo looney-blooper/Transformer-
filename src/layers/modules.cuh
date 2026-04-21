@@ -35,6 +35,11 @@ namespace layers {
         Tensor* X_cache; 
         Tensor* normalized_cache;
 
+        Tensor* X_save;
+
+        Tensor* mean;
+        Tensor* inv_std;
+
         LayerNorm(int d_model, float eps = 1e-5f);
 
         ~LayerNorm();
@@ -85,6 +90,7 @@ namespace layers {
         Tensor* dWeight;
 
         int* ids_cache; // Remembers the input tokens for backprop
+        
 
         Embedding(int vocab_size, int d_model);
 

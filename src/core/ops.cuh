@@ -12,4 +12,6 @@ namespace ops {
 
     // In-place Tensor Addition: A = A + B
     void add_tensors(Tensor* A, Tensor* B);
+
+    void strided_batched_matmul(Tensor* A, Tensor* B, Tensor* C, int b, int h, int m, int n, int k, bool transA, bool transB);
 }
