@@ -8,6 +8,14 @@ DATA_URL = "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tiny
 HF_REPO_ID = "mithun017/cpp-transformer-weights" 
 HF_TOKEN = os.getenv("HF_TOKEN") # Pull securely from environment variables
 
+COMPILE_CMD = ["nvcc", "-O3",
+               "src/main.cu",
+               "src/core/ops.cu","src/core/optimizer.cu",
+               "src/model/gpt.cu","src/model/transformer.cu", 
+               "src/layers/attention.cu","src/layers/loss.cu","src/layers/modules.cu", 
+               "src/data/tokenizer.cpp", "src/data/dataloader.cpp",
+               "-lcublas", "-o", "gpt_engine"]
+
 def run_cmd(cmd):
     print(f"\n>>> Executing: {' '.join(cmd)}")
     subprocess.run(cmd, check=True)
@@ -21,9 +29,7 @@ def main():
     # 2. Compile Engine
     print("\n[ COMPILING C++ ENGINE ]")
     # Adjust path if main.cu is inside src/
-    run_cmd(["nvcc", "-O3", "src/main.cu","src/core/*.cu","src/model/*.cu", 
-             "src/layers/*.cu", "src/data/*.cpp", 
-             "-lcublas", "-o", "gpt_engine"])
+    run_cmd(COMPILE_CMD)
 
     # 3. Train
     print("\n[ IGNITING TRAINING LOOP ]")
