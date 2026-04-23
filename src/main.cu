@@ -70,7 +70,7 @@ int main(int argc, char* argv[]) {
     std::cout << "==================================================\n" << std::endl;
 
     ops::init_cublas();
-    std::string text = read_file("src/input.txt"); 
+    std::string text = read_file("input.txt"); 
 
     // Hyperparameters
     int target_vocab_size = 300; 
@@ -133,17 +133,17 @@ int main(int argc, char* argv[]) {
         cudaFree(d_X); cudaFree(d_Y);
 
     } else if (mode == "infer") {
-        std::cout << "\n[ LOADING PRE-TRAINED WEIGHTS ]\n" << std::endl;
-        // --- THE ARTIFACT INJECTION ---
-        gpt.load_pretrained("gpt2_weights.bin");
-
+        // ... loading weights ...
         gpt.enable_kv_cache();
 
-        std::string seed_text = "The";
-        std::vector<int> generated_tokens = tokenizer.encode(seed_text);
-        int current_token = generated_tokens[0];
+        // THE PATCH: Read the prompt from the command line, default to "The" if missing
+        std::string seed_text = (argc >= 3) ? argv[2] : "The";
         
-        std::cout << "\nOutput: " << seed_text << std::flush;
+        std::vector<int> generated_tokens = tokenizer.encode(seed_text);
+        int current_token = generated_tokens.back(); // Feed the last token to the GPU
+        
+        // Output a clean JSON-friendly string for the web server to read
+        std::cout << seed_text;
 
         int* d_single_input;
         cudaMalloc(&d_single_input, 1 * sizeof(int));
@@ -159,11 +159,11 @@ int main(int argc, char* argv[]) {
             generated_tokens.push_back(next_token);
             
             std::vector<int> print_vec = {next_token};
-            std::cout << tokenizer.decode(print_vec) << std::flush;
+            std::cout << tokenizer.decode(print_vec); // Print directly without extra formatting
 
             current_token = next_token;
         }
-        std::cout << "\n\nInference Complete." << std::endl;
+        std::cout << std::endl; // One clean newline at the end
         cudaFree(d_single_input);
     } else {
         std::cerr << "Invalid mode. Use 'train' or 'infer'." << std::endl;
