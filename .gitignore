@@ -1,3 +1,7 @@
-/Makefile
-
 /transformer_test
+
+*.bin
+
+/input.txt
+
+/Makefile
