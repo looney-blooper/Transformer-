@@ -224,4 +224,20 @@ namespace model {
         std::cout << std::left << std::setw(20) << "Physical Size:" << std::fixed << std::setprecision(2) << memory_mb << " MB (FP32)" << std::endl;
         std::cout << "==================================================\n" << std::endl;
     }
+
+    void model::GPT::save_int8(const std::string& filepath) {
+        std::ofstream out(filepath, std::ios::binary);
+        std::vector<Tensor*> params = this->parameters();
+        for (Tensor* p : params) p->save_int8(out);
+        out.close();
+        std::cout << "INT8 Compressed Brain saved to: " << filepath << std::endl;
+    }
+
+    void model::GPT::load_int8(const std::string& filepath) {
+        std::ifstream in(filepath, std::ios::binary);
+        std::vector<Tensor*> params = this->parameters();
+        for (Tensor* p : params) p->load_int8(in);
+        in.close();
+        std::cout << "INT8 Compressed Brain loaded from: " << filepath << std::endl;
+    }
 }

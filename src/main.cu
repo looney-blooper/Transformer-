@@ -83,7 +83,6 @@ int main(int argc, char* argv[]) {
 
     // Data Pipeline
     data::BPETokenizer tokenizer(target_vocab_size);
-    tokenizer.train(text);
 
     // Engine Initialization
     model::GPT gpt(target_vocab_size, d_model, num_heads, d_ff, num_layers, max_seq_len, batch_size);
@@ -92,6 +91,8 @@ int main(int argc, char* argv[]) {
     if (mode == "train") {
         std::cout << "\n[ INITIALIZING RANDOM WEIGHTS ]\n" << std::endl;
         initialize_model_weights(gpt);
+
+        tokenizer.train(text);
         
         std::vector<int> tokens = tokenizer.encode(text);
         data::DataLoader dataloader(tokens, batch_size, max_seq_len);
@@ -186,6 +187,17 @@ int main(int argc, char* argv[]) {
         }
         std::cout << std::endl; // One clean newline at the end
         cudaFree(d_single_input);
+    } else if (mode == "compress") {
+        std::cout << "\n[ INITIATING INT8 COMPRESSION ]\n" << std::endl;
+        
+        // 1. Load the heavy FP32 model
+        gpt.load_pretrained("gpt2_weights.bin");
+        
+        // 2. Quantize and save
+        gpt.save_int8("gpt2_weights_int8.bin");
+        
+        std::cout << "Compression complete. Check your hard drive for the new file sizes." << std::endl;
+
     } else {
         std::cerr << "Invalid mode. Use 'train' or 'infer'." << std::endl;
     }

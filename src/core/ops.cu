@@ -35,7 +35,7 @@ namespace ops {
         int A_rows = A->size / A_cols;
         
         int B_cols = B->shape.back();
-        int B_rows = B->size / B_cols;
+        //int B_rows = B->size / B_cols;
 
         int C_cols = C->shape.back();
         int C_rows = C->size / C_cols;

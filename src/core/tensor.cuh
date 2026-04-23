@@ -24,6 +24,13 @@ public:
     float* d_data;     // Device (GPU) pointer
     float* d_grad;     // Device (GPU) gradients for backprop
 
+    // NEW: The INT8 Memory Pointers & Scale
+    int8_t* h_data_int8;
+    int8_t* d_data_int8;
+    float quant_scale;
+    bool is_quantized;
+
+
     // Constructor: Allocates memory on CPU and GPU
     Tensor(std::vector<int> s, bool requires_grad = true) {     
         shape = s;
@@ -96,5 +103,62 @@ public:
         
         // 3. Blast the loaded weights into VRAM
         this->to_device();
+    }
+
+    void quantize_to_int8() {
+        if (is_quantized) return;
+        this->to_host(); // Ensure CPU has the latest FP32 weights
+
+        // 1. Find the absolute maximum value in the tensor
+        float max_val = 1e-8f; // Avoid division by zero
+        for (int i = 0; i < size; i++) {
+            if (std::abs(h_data[i]) > max_val) {
+                max_val = std::abs(h_data[i]);
+            }
+        }
+
+        // 2. Calculate the scaling factor
+        quant_scale = 127.0f / max_val;
+
+        // 3. Allocate INT8 RAM and Compress
+        h_data_int8 = new int8_t[size];
+        for (int i = 0; i < size; i++) {
+            float scaled = h_data[i] * quant_scale;
+            // Clip and round
+            scaled = std::max(-127.0f, std::min(127.0f, scaled));
+            h_data_int8[i] = static_cast<int8_t>(std::round(scaled));
+        }
+
+        is_quantized = true;
+
+        // 4. Free the heavy FP32 memory
+        delete[] h_data; h_data = nullptr;
+        if (d_data) { cudaFree(d_data); d_data = nullptr; }
+    }
+
+    void save_int8(std::ofstream& out) {
+        if (!is_quantized) quantize_to_int8();
+        
+        out.write(reinterpret_cast<const char*>(&size), sizeof(int));
+        out.write(reinterpret_cast<const char*>(&quant_scale), sizeof(float)); // Save the key to un-compress it
+        out.write(reinterpret_cast<const char*>(h_data_int8), size * sizeof(int8_t));
+    }
+
+    void load_int8(std::ifstream& in) {
+        int file_size = 0;
+        in.read(reinterpret_cast<char*>(&file_size), sizeof(int));
+        if (file_size != this->size) throw std::runtime_error("INT8 Architecture mismatch.");
+
+        in.read(reinterpret_cast<char*>(&quant_scale), sizeof(float));
+        
+        // Allocate host INT8 array and read the tiny bytes
+        if (!h_data_int8) h_data_int8 = new int8_t[size];
+        in.read(reinterpret_cast<char*>(h_data_int8), size * sizeof(int8_t));
+        
+        // Blast INT8 straight to VRAM
+        if (!d_data_int8) cudaMalloc(&d_data_int8, size * sizeof(int8_t));
+        cudaMemcpy(d_data_int8, h_data_int8, size * sizeof(int8_t), cudaMemcpyHostToDevice);
+        
+        is_quantized = true;
     }
 };

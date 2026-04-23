@@ -53,8 +53,12 @@ namespace model {
         void save_pretrained(const std::string& filepath);
         void load_pretrained(const std::string& filepath);
 
-        //telemetery
+        //params
         size_t get_parameter_count();
         void print_model_summary();
+
+        //quantization
+        void save_int8(const std::string& filepath);
+        void load_int8(const std::string& filepath);
     };
 }
