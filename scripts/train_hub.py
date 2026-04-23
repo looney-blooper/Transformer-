@@ -21,7 +21,7 @@ def main():
     # 2. Compile Engine
     print("\n[ COMPILING C++ ENGINE ]")
     # Adjust path if main.cu is inside src/
-    run_cmd(["nvcc", "-O3", "src/main.cu", "src/core/tensor.cu", "src/model/gpt.cu", 
+    run_cmd(["nvcc", "-O3", "src/main.cu", "src/model/gpt.cu", 
              "src/layers/loss.cu", "src/data/tokenizer.cpp", "src/data/dataloader.cpp", 
              "-lcublas", "-o", "gpt_engine"])
 
