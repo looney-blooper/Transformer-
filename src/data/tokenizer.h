@@ -37,6 +37,9 @@ namespace data {
         std::vector<int> encode(const std::string& text);
         std::string decode(const std::vector<int>& tokens);
 
+        void save(const std::string& filepath);
+        void load(const std::string& filepath);
+
     private:
         // Helper function to find the most frequent adjacent pairs in an array of tokens
         std::pair<int, int> get_most_frequent_pair(const std::vector<int>& tokens);

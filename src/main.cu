@@ -87,6 +87,7 @@ int main(int argc, char* argv[]) {
 
     // Engine Initialization
     model::GPT gpt(target_vocab_size, d_model, num_heads, d_ff, num_layers, max_seq_len, batch_size);
+    data::BPETokenizer tokenizer(target_vocab_size);
 
     if (mode == "train") {
         std::cout << "\n[ INITIALIZING RANDOM WEIGHTS ]\n" << std::endl;
@@ -106,6 +107,12 @@ int main(int argc, char* argv[]) {
 
         gpt.disable_kv_cache();
         int epochs = 150;
+
+        std::cout << "--> Training BPE Tokenizer..." << std::endl;
+        tokenizer.train(text);
+        
+        // Save the learned vocabulary immediately
+        tokenizer.save("vocab.bin");
 
         for (int epoch = 1; epoch <= epochs; epoch++) {
             dataloader.reset();
@@ -130,10 +137,18 @@ int main(int argc, char* argv[]) {
         std::cout << "\n[ TRAINING COMPLETE. EXTRACTING BRAIN... ]\n" << std::endl;
         gpt.save_pretrained("gpt2_weights.bin");
 
+
+
         cudaFree(d_X); cudaFree(d_Y);
 
     } else if (mode == "infer") {
         // ... loading weights ...
+        std::cout << "\n[ LOADING PRE-TRAINED ARTIFACTS ]\n" << std::endl;
+        
+        // Load BOTH the weights and the vocabulary. No input.txt required!
+        gpt.load_pretrained("gpt2_weights.bin");
+        tokenizer.load("vocab.bin");
+        
         gpt.enable_kv_cache();
 
         // THE PATCH: Read the prompt from the command line, default to "The" if missing

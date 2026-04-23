@@ -39,9 +39,18 @@ def main():
     if HF_TOKEN:
         print("\n[ PUSHING ARTIFACT TO HUGGING FACE ]")
         api = HfApi()
+        #model parameters
         api.upload_file(
             path_or_fileobj="gpt2_weights.bin",
             path_in_repo="gpt2_weights.bin",
+            repo_id=HF_REPO_ID,
+            repo_type="model",
+            token=HF_TOKEN
+        )
+        #embedding weights
+        api.upload_file(
+            path_or_fileobj="vocab.bin",
+            path_in_repo="vocab.bin",
             repo_id=HF_REPO_ID,
             repo_type="model",
             token=HF_TOKEN

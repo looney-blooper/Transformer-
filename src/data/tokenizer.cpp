@@ -1,6 +1,8 @@
 #include "tokenizer.h"
 #include <iostream>
 #include <iomanip>
+#include <fstream>
+#include <stdexcept>
 
 namespace data {
 
@@ -192,5 +194,81 @@ namespace data {
         }
         
         return text;
+    }
+
+    void BPETokenizer::save(const std::string& filepath) {
+        std::ofstream out(filepath, std::ios::binary);
+        if (!out.is_open()) {
+            throw std::runtime_error("Could not open vocab file for saving: " + filepath);
+        }
+
+        // 1. Write the target and current vocab sizes to maintain state
+        out.write(reinterpret_cast<const char*>(&target_vocab_size), sizeof(int));
+        out.write(reinterpret_cast<const char*>(&current_vocab_size), sizeof(int));
+
+        // 2. Write the total number of merge rules
+        int num_merges = merge_rules.size();
+        out.write(reinterpret_cast<const char*>(&num_merges), sizeof(int));
+
+        // 3. Write the sequential rules (Left Token, Right Token)
+        for (const auto& pair : merge_rules) {
+            int left = pair.first;
+            int right = pair.second;
+            
+            out.write(reinterpret_cast<const char*>(&left), sizeof(int));
+            out.write(reinterpret_cast<const char*>(&right), sizeof(int));
+        }
+        
+        out.close();
+        std::cout << "Vocabulary saved to " << filepath << " (" << num_merges << " merges)" << std::endl;
+    }
+
+    void BPETokenizer::load(const std::string& filepath) {
+        std::ifstream in(filepath, std::ios::binary);
+        if (!in.is_open()) {
+            throw std::runtime_error("Could not open vocab file for loading: " + filepath);
+        }
+
+        // 1. Clear any existing state
+        merge_rules.clear();
+        vocab.clear();
+        inverse_vocab.clear();
+        
+        // 2. Re-initialize the base ASCII dictionary (IDs 0-255)
+        for (int i = 0; i < 256; i++) {
+            std::string ch = std::string(1, (char)i);
+            vocab[ch] = i;
+            inverse_vocab[i] = ch;
+        }
+
+        // 3. Read the state variables
+        in.read(reinterpret_cast<char*>(&target_vocab_size), sizeof(int));
+        in.read(reinterpret_cast<char*>(&current_vocab_size), sizeof(int));
+
+        int num_merges = 0;
+        in.read(reinterpret_cast<char*>(&num_merges), sizeof(int));
+
+        // 4. Read the rules and reconstruct the master dictionaries
+        for (int i = 0; i < num_merges; i++) {
+            int left, right;
+            in.read(reinterpret_cast<char*>(&left), sizeof(int));
+            in.read(reinterpret_cast<char*>(&right), sizeof(int));
+            
+            // Add the rule back to the ordered list
+            merge_rules.push_back({left, right});
+
+            // Reconstruct the New Token ID (Sequential, starting from 256)
+            int new_token_id = 256 + i;
+            
+            // Reconstruct the physical string by looking up the left and right components
+            std::string new_token_str = inverse_vocab[left] + inverse_vocab[right];
+            
+            // Re-map the dictionaries
+            vocab[new_token_str] = new_token_id;
+            inverse_vocab[new_token_id] = new_token_str;
+        }
+        
+        in.close();
+        std::cout << "Vocabulary loaded from " << filepath << " (Total Vocab Size: " << current_vocab_size << ")" << std::endl;
     }
 }
