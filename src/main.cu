@@ -107,9 +107,6 @@ int main(int argc, char* argv[]) {
 
         gpt.disable_kv_cache();
         int epochs = 150;
-
-        std::cout << "--> Training BPE Tokenizer..." << std::endl;
-        tokenizer.train(text);
         
         // Save the learned vocabulary immediately
         tokenizer.save("vocab.bin");
@@ -148,7 +145,7 @@ int main(int argc, char* argv[]) {
         // Load BOTH the weights and the vocabulary. No input.txt required!
         gpt.load_pretrained("gpt2_weights.bin");
         tokenizer.load("vocab.bin");
-        
+
         gpt.enable_kv_cache();
 
         // THE PATCH: Read the prompt from the command line, default to "The" if missing
