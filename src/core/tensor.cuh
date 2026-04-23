@@ -2,6 +2,8 @@
 #include <iostream>
 #include <vector>
 #include <cuda_runtime.h>
+#include <fstream>
+#include <stdexcept>
 
 // Macro for error checking CUDA calls
 #define CUDA_CHECK(call) \
@@ -67,5 +69,32 @@ public:
         if (d_grad) {
             CUDA_CHECK(cudaMemset(d_grad, 0, size * sizeof(float)));
         }
+    }
+
+    void save(std::ofstream& out) {
+        // 1. Pull the absolute latest weights from VRAM to CPU RAM
+        this->to_host(); 
+        
+        // 2. Write the size (as a safety check)
+        out.write(reinterpret_cast<const char*>(&size), sizeof(int));
+        
+        // 3. Dump the raw float array directly to binary
+        out.write(reinterpret_cast<const char*>(h_data), size * sizeof(float));
+    }
+
+    void load(std::ifstream& in) {
+        // 1. Read the size check
+        int file_size = 0;
+        in.read(reinterpret_cast<char*>(&file_size), sizeof(int));
+        
+        if (file_size != this->size) {
+            throw std::runtime_error("Architecture mismatch! The saved weights do not match this matrix.");
+        }
+        
+        // 2. Read the raw floats directly into CPU RAM
+        in.read(reinterpret_cast<char*>(h_data), size * sizeof(float));
+        
+        // 3. Blast the loaded weights into VRAM
+        this->to_device();
     }
 };

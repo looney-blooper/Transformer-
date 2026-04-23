@@ -1,5 +1,6 @@
 #pragma once
 #include <vector>
+#include <string>
 #include "../core/tensor.cuh"
 #include "../layers/modules.cuh"
 #include "../layers/attention.cuh"
@@ -46,5 +47,9 @@ namespace model {
         void enable_kv_cache();
         void disable_kv_cache();
         void clear_kv_cache();
+
+        //model save n load
+        void save_pretrained(const std::string& filepath);
+        void load_pretrained(const std::string& filepath);
     };
 }

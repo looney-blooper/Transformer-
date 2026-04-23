@@ -1,5 +1,6 @@
 #include "gpt.cuh"
 #include <iostream>
+#include <fstream>
 
 namespace model {
     GPT::GPT(int vocab_size, int d_model, int num_heads, int d_ff, int num_layers, int max_seq_len, int batch_size){
@@ -159,5 +160,37 @@ namespace model {
         for (auto block : blocks) {
             block->clear_kv_cache();
         }
+    }
+
+    void model::GPT::save_pretrained(const std::string& filepath) {
+        std::ofstream out(filepath, std::ios::binary);
+        if (!out.is_open()) {
+            std::cerr << "Failed to open " << filepath << " for saving." << std::endl;
+            return;
+        }
+
+        std::vector<Tensor*> params = this->parameters();
+        for (Tensor* p : params) {
+            p->save(out);
+        }
+        
+        out.close();
+        std::cout << "Model weights successfully saved to: " << filepath << std::endl;
+    }
+
+    void model::GPT::load_pretrained(const std::string& filepath) {
+        std::ifstream in(filepath, std::ios::binary);
+        if (!in.is_open()) {
+            std::cerr << "Failed to open " << filepath << " for loading." << std::endl;
+            return;
+        }
+
+        std::vector<Tensor*> params = this->parameters();
+        for (Tensor* p : params) {
+            p->load(in);
+        }
+        
+        in.close();
+        std::cout << "Model weights successfully loaded from: " << filepath << std::endl;
     }
 }
