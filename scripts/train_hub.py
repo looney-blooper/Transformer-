@@ -5,7 +5,7 @@ from huggingface_hub import HfApi
 
 # Configuration
 DATA_URL = "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt"
-HF_REPO_ID = "YOUR_HF_USERNAME/cpp-transformer-weights" # UPDATE THIS
+HF_REPO_ID = "mithun017/cpp-transformer-weights" 
 HF_TOKEN = os.getenv("HF_TOKEN") # Pull securely from environment variables
 
 def run_cmd(cmd):
@@ -21,7 +21,7 @@ def main():
     # 2. Compile Engine
     print("\n[ COMPILING C++ ENGINE ]")
     # Adjust path if main.cu is inside src/
-    run_cmd(["nvcc", "-O3", "main.cu", "src/core/tensor.cu", "src/model/gpt.cu", 
+    run_cmd(["nvcc", "-O3", "src/main.cu", "src/core/tensor.cu", "src/model/gpt.cu", 
              "src/layers/loss.cu", "src/data/tokenizer.cpp", "src/data/dataloader.cpp", 
              "-lcublas", "-o", "gpt_engine"])
 
