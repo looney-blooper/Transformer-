@@ -16,6 +16,7 @@ namespace model {
         int num_layers;
         int max_seq_len;
         int batch_size;
+        int d_ff;
 
         //input layer
         layers::Embedding* tok_emb;
@@ -51,5 +52,9 @@ namespace model {
         //model save n load
         void save_pretrained(const std::string& filepath);
         void load_pretrained(const std::string& filepath);
+
+        //telemetery
+        size_t get_parameter_count();
+        void print_model_summary();
     };
 }

@@ -87,7 +87,7 @@ int main(int argc, char* argv[]) {
 
     // Engine Initialization
     model::GPT gpt(target_vocab_size, d_model, num_heads, d_ff, num_layers, max_seq_len, batch_size);
-    data::BPETokenizer tokenizer(target_vocab_size);
+    gpt.print_model_summary();
 
     if (mode == "train") {
         std::cout << "\n[ INITIALIZING RANDOM WEIGHTS ]\n" << std::endl;
@@ -111,6 +111,10 @@ int main(int argc, char* argv[]) {
         // Save the learned vocabulary immediately
         tokenizer.save("vocab.bin");
 
+        // OPEN TELEMETRY FILE
+        std::ofstream history_file("training_history.csv");
+        history_file << "Epoch,Loss\n"; // CSV Header
+
         for (int epoch = 1; epoch <= epochs; epoch++) {
             dataloader.reset();
             int step = 0;
@@ -127,14 +131,19 @@ int main(int argc, char* argv[]) {
                 epoch_loss += loss;
                 step++;
             }
-            std::cout << "Epoch " << epoch << "/" << epochs << " | Avg Loss: " << std::fixed << std::setprecision(5) << (epoch_loss / step) << std::endl;
+
+            float avg_loss = epoch_loss / step;
+            std::cout << "Epoch " << epoch << "/" << epochs << " | Avg Loss: " << std::fixed << std::setprecision(5) << avg_loss << std::endl;
+            
+            // LOG TELEMETRY
+            history_file << epoch << "," << avg_loss << "\n";
         }
 
         // --- THE ARTIFACT EXTRACTION ---
         std::cout << "\n[ TRAINING COMPLETE. EXTRACTING BRAIN... ]\n" << std::endl;
         gpt.save_pretrained("gpt2_weights.bin");
 
-
+        history_file.close(); // Close the log safely
 
         cudaFree(d_X); cudaFree(d_Y);
 

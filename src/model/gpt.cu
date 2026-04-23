@@ -1,6 +1,7 @@
 #include "gpt.cuh"
 #include <iostream>
 #include <fstream>
+#include <iomanip>
 
 namespace model {
     GPT::GPT(int vocab_size, int d_model, int num_heads, int d_ff, int num_layers, int max_seq_len, int batch_size){
@@ -10,6 +11,7 @@ namespace model {
         this->num_layers = num_layers;
         this->batch_size = batch_size;
         this->max_seq_len = max_seq_len;
+        this->d_ff = d_ff;
 
         //1. Input Archeitecture
         tok_emb = new layers::Embedding(vocab_size, d_model);
@@ -192,5 +194,34 @@ namespace model {
         
         in.close();
         std::cout << "Model weights successfully loaded from: " << filepath << std::endl;
+    }
+
+
+    size_t model::GPT::get_parameter_count() {
+        size_t total_params = 0;
+        std::vector<Tensor*> params = this->parameters();
+        for (Tensor* p : params) {
+            total_params += p->size;
+        }
+        return total_params;
+    }
+
+    void model::GPT::print_model_summary() {
+        size_t total_params = get_parameter_count();
+        float memory_mb = (float)(total_params * sizeof(float)) / (1024.0f * 1024.0f);
+
+        std::cout << "\n==================================================" << std::endl;
+        std::cout << "             MODEL ARCHITECTURE SUMMARY           " << std::endl;
+        std::cout << "==================================================" << std::endl;
+        std::cout << std::left << std::setw(20) << "Vocab Size:" << vocab_size << std::endl;
+        std::cout << std::left << std::setw(20) << "Context Window:" << max_seq_len << " tokens" << std::endl;
+        std::cout << std::left << std::setw(20) << "Embedding Dim:" << d_model << std::endl;
+        std::cout << std::left << std::setw(20) << "Attention Heads:" << num_heads << std::endl;
+        std::cout << std::left << std::setw(20) << "FeedForward Dim:" << d_ff << std::endl;
+        std::cout << std::left << std::setw(20) << "Transformer Layers:" << num_layers << std::endl;
+        std::cout << "--------------------------------------------------" << std::endl;
+        std::cout << std::left << std::setw(20) << "Total Parameters:" << total_params << std::endl;
+        std::cout << std::left << std::setw(20) << "Physical Size:" << std::fixed << std::setprecision(2) << memory_mb << " MB (FP32)" << std::endl;
+        std::cout << "==================================================\n" << std::endl;
     }
 }

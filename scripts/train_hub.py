@@ -3,6 +3,9 @@ import subprocess
 import urllib.request
 from huggingface_hub import HfApi
 
+import pandas as pd
+import matplotlib.pyplot as plt
+
 # Configuration
 DATA_URL = "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt"
 HF_REPO_ID = "mithun017/cpp-transformer-weights" 
@@ -35,29 +38,38 @@ def main():
     print("\n[ IGNITING TRAINING LOOP ]")
     run_cmd(["./gpt_engine", "train"])
 
-    # 4. Upload to Hugging Face
+    # NEW STEP 4: Generate the Loss Graph
+    print("\n[ GENERATING TELEMETRY GRAPH ]")
+    if os.path.exists("training_history.csv"):
+        df = pd.read_csv("training_history.csv")
+        plt.figure(figsize=(10, 6))
+        plt.plot(df['Epoch'], df['Loss'], marker='', color='b', linewidth=2)
+        plt.title('Training Loss Curve')
+        plt.xlabel('Epoch')
+        ylabel = 'Cross-Entropy Loss'
+        plt.ylabel(ylabel)
+        plt.grid(True)
+        plt.savefig("loss_curve.png")
+        print("Generated loss_curve.png")
+
+    # STEP 5: Upload to Hugging Face
     if HF_TOKEN:
-        print("\n[ PUSHING ARTIFACT TO HUGGING FACE ]")
+        print("\n[ PUSHING ARTIFACTS TO HUGGING FACE ]")
         api = HfApi()
-        #model parameters
-        api.upload_file(
-            path_or_fileobj="gpt2_weights.bin",
-            path_in_repo="gpt2_weights.bin",
-            repo_id=HF_REPO_ID,
-            repo_type="model",
-            token=HF_TOKEN
-        )
-        #embedding weights
-        api.upload_file(
-            path_or_fileobj="vocab.bin",
-            path_in_repo="vocab.bin",
-            repo_id=HF_REPO_ID,
-            repo_type="model",
-            token=HF_TOKEN
-        )
-        print("Success! Brain secured in the cloud.")
-    else:
-        print("\n[ WARNING: HF_TOKEN not found in environment. Skipping upload. ]")
+        
+        # Upload the artifacts we just created
+        files_to_upload = ["gpt2_weights.bin", "vocab.bin", "training_history.csv", "loss_curve.png"]
+        
+        for file in files_to_upload:
+            if os.path.exists(file):
+                api.upload_file(
+                    path_or_fileobj=file,
+                    path_in_repo=file,
+                    repo_id=HF_REPO_ID,
+                    repo_type="model",
+                    token=HF_TOKEN
+                )
+        print("Success! Brain, Vocab, and Telemetry secured in the cloud.")
 
 if __name__ == "__main__":
     main()
