@@ -60,7 +60,7 @@ void initialize_model_weights(model::GPT& gpt) {
 
 int main(int argc, char* argv[]) {
     if (argc < 2) {
-        std::cerr << "Usage: ./gpt_engine [train | infer]" << std::endl;
+        std::cerr << "Usage: ./gpt_engine [train | infer | compress]" << std::endl;
         return 1;
     }
     std::string mode = argv[1];
@@ -70,7 +70,6 @@ int main(int argc, char* argv[]) {
     std::cout << "==================================================\n" << std::endl;
 
     ops::init_cublas();
-    std::string text = read_file("input.txt"); 
 
     // Hyperparameters
     int target_vocab_size = 300; 
@@ -89,6 +88,8 @@ int main(int argc, char* argv[]) {
     gpt.print_model_summary();
 
     if (mode == "train") {
+        std::string text = read_file("input.txt"); 
+
         std::cout << "\n[ INITIALIZING RANDOM WEIGHTS ]\n" << std::endl;
         initialize_model_weights(gpt);
 
