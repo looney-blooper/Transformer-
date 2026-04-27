@@ -27,8 +27,8 @@ public:
     // NEW: The INT8 Memory Pointers & Scale
     int8_t* h_data_int8 = nullptr;
     int8_t* d_data_int8 = nullptr;
-    float quant_scale;
-    bool is_quantized;
+    float quant_scale = 0.0f;
+    bool is_quantized = false;
 
 
     // Constructor: Allocates memory on CPU and GPU

@@ -227,10 +227,34 @@ namespace model {
 
     void model::GPT::save_int8(const std::string& filepath) {
         std::ofstream out(filepath, std::ios::binary);
+        if (!out.is_open()) {
+            std::cerr << "CRITICAL ERROR: Failed to open " << filepath << " for writing." << std::endl;
+            return;
+        }
+
         std::vector<Tensor*> params = this->parameters();
-        for (Tensor* p : params) p->save_int8(out);
+        std::cout << "\n[DIAGNOSTIC] Total tensors to compress: " << params.size() << std::endl;
+
+        for (size_t i = 0; i < params.size(); i++) {
+            Tensor* p = params[i];
+            
+            // Print BEFORE compression
+            std::cout << "-> Compressing Tensor [" << i << "/" << params.size() - 1 << "] | Size: " << p->size << " | State: " << p->is_quantized << std::flush;
+            
+            p->save_int8(out);
+            
+            // Check if the file stream silently crashed
+            if (!out.good()) {
+                std::cerr << " [STREAM ERROR: File write failed!]" << std::endl;
+                break;
+            }
+            
+            // Print AFTER compression
+            std::cout << " [SUCCESS]" << std::endl;
+        }
+        
         out.close();
-        std::cout << "INT8 Compressed Brain saved to: " << filepath << std::endl;
+        std::cout << "\n[DIAGNOSTIC] Compression sequence completely finished." << std::endl;
     }
 
     void model::GPT::load_int8(const std::string& filepath) {
