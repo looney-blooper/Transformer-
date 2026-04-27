@@ -25,8 +25,8 @@ public:
     float* d_grad;     // Device (GPU) gradients for backprop
 
     // NEW: The INT8 Memory Pointers & Scale
-    int8_t* h_data_int8;
-    int8_t* d_data_int8;
+    int8_t* h_data_int8 = nullptr;
+    int8_t* d_data_int8 = nullptr;
     float quant_scale;
     bool is_quantized;
 
@@ -59,6 +59,9 @@ public:
         if (h_data) free(h_data);
         if (d_data) cudaFree(d_data);
         if (d_grad) cudaFree(d_grad);
+
+        if (h_data_int8) { delete[] h_data_int8; h_data_int8 = nullptr; }
+        if (d_data_int8) { cudaFree(d_data_int8); d_data_int8 = nullptr; }
     }
 
     // Move data from CPU to GPU
