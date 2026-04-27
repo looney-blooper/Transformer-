@@ -134,9 +134,6 @@ public:
 
         is_quantized = true;
 
-        // 4. Free the heavy FP32 memory
-        delete[] h_data; h_data = nullptr;
-        if (d_data) { cudaFree(d_data); d_data = nullptr; }
     }
 
     void save_int8(std::ofstream& out) {
