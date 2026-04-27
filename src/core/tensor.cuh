@@ -163,7 +163,7 @@ public:
         if (!h_data) h_data = new float[size];
         for (int i = 0; i < size; i++) {
             // Reverse the scaling math
-            h_data[i] = static_cast<float>(h_data_int8[i]) * quant_scale;
+            h_data[i] = static_cast<float>(h_data_int8[i]) / quant_scale;
         }
         
         // 3. Blast the inflated, mathematically restored weights into VRAM
