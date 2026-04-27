@@ -144,21 +144,30 @@ public:
         out.write(reinterpret_cast<const char*>(h_data_int8), size * sizeof(int8_t));
     }
 
-    void load_int8(std::ifstream& in) {
+    void Tensor::load_int8(std::ifstream& in) {
         int file_size = 0;
         in.read(reinterpret_cast<char*>(&file_size), sizeof(int));
-        if (file_size != this->size) throw std::runtime_error("INT8 Architecture mismatch.");
+        
+        // SAFETY CHECK: This is what will catch your 36KB truncated file!
+        if (file_size != this->size) {
+            throw std::runtime_error("CRITICAL: INT8 Architecture mismatch. File is corrupted or truncated.");
+        }
 
         in.read(reinterpret_cast<char*>(&quant_scale), sizeof(float));
         
-        // Allocate host INT8 array and read the tiny bytes
+        // 1. Read the tiny INT8 bytes into CPU RAM
         if (!h_data_int8) h_data_int8 = new int8_t[size];
         in.read(reinterpret_cast<char*>(h_data_int8), size * sizeof(int8_t));
         
-        // Blast INT8 straight to VRAM
-        if (!d_data_int8) cudaMalloc(&d_data_int8, size * sizeof(int8_t));
-        cudaMemcpy(d_data_int8, h_data_int8, size * sizeof(int8_t), cudaMemcpyHostToDevice);
+        // 2. INFLATION: Allocate FP32 memory and decompress
+        if (!h_data) h_data = new float[size];
+        for (int i = 0; i < size; i++) {
+            // Reverse the scaling math
+            h_data[i] = static_cast<float>(h_data_int8[i]) * quant_scale;
+        }
         
+        // 3. Blast the inflated, mathematically restored weights into VRAM
+        this->to_device();
         is_quantized = true;
     }
 };

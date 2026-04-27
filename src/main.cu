@@ -151,10 +151,10 @@ int main(int argc, char* argv[]) {
 
     } else if (mode == "infer") {
         // ... loading weights ...
-        std::cout << "\n[ LOADING PRE-TRAINED ARTIFACTS ]\n" << std::endl;
+        std::cout << "\n[ LOADING INT8 COMPRESSED ARTIFACTS ]\n" << std::endl;
         
-        // Load BOTH the weights and the vocabulary. No input.txt required!
-        gpt.load_pretrained("gpt2_weights.bin");
+        // THE PATCH: Load the 8-bit weights instead of the 32-bit weights
+        gpt.load_int8("gpt2_weights_int8.bin"); 
         tokenizer.load("vocab.bin");
 
         gpt.enable_kv_cache();
