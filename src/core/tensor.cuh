@@ -144,7 +144,7 @@ public:
         out.write(reinterpret_cast<const char*>(h_data_int8), size * sizeof(int8_t));
     }
 
-    void Tensor::load_int8(std::ifstream& in) {
+    void load_int8(std::ifstream& in) {
         int file_size = 0;
         in.read(reinterpret_cast<char*>(&file_size), sizeof(int));
         
