@@ -30,7 +30,7 @@ jobs:
     # 4. The Master Compilation Command
     - name: Compile Transformer Engine
       run: |
-        nvcc -O3 src/main.cu src/core/*.cu src/model/*.cu src/layers/*.cu src/data/*.cpp -lcublas -o gpt_engine
+        nvcc -O3 src/main.cu src/core/*.cu src/model/*.cu src/layers/*.cu src/data/*.cpp src/modes/*.cu -lcublas -o gpt_engine
 
     # 5. Verify the binary was successfully created
     - name: Verify Build Artifact
