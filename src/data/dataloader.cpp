@@ -1,3 +1,4 @@
+#include <iostream>
 #include "dataloader.h"
 #include <cuda_runtime.h>
 
@@ -49,6 +50,18 @@ namespace data {
 
     void DataLoader::reset() {
         current_position = 0;
+    }
+
+
+    void DataLoader::fast_forward_to_step(int step) {
+        // Calculate exactly how many tokens were consumed to reach this step
+        current_position = step * batch_size * max_seq_len;
+        
+        // Safety check to prevent segfaults if the step count is somehow higher than the dataset
+        if (current_position >= tokens.size() - 1) {
+            current_position = 0; 
+        }
+        std::cout << "[DATALOADER] Buffer fast-forwarded to token index " << current_position << std::endl;
     }
 
 }

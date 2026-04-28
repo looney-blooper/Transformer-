@@ -100,4 +100,54 @@ namespace core {
             cudaMemset(p->d_grad, 0, p->size * sizeof(float));
         }
     }
+
+    void AdamW::save_state(const std::string& filepath) {
+        std::ofstream out(filepath, std::ios::binary);
+        if (!out.is_open()) {
+            throw std::runtime_error("CRITICAL: Failed to open optimizer state file for writing.");
+        }
+
+        // 1. Save the exact step count (critical for bias correction math)
+        out.write(reinterpret_cast<const char*>(&step_count), sizeof(int));
+
+        // 2. Save Momentum (m_state)
+        for (Tensor* m : m_state) {
+            m->to_host();  // Ensure latest GPU math is copied to CPU RAM
+            m->save(out);  // Dump the FP32 array
+        }
+
+        // 3. Save Variance (v_state)
+        for (Tensor* v : v_state) {
+            v->to_host();
+            v->save(out);
+        }
+
+        out.close();
+        std::cout << "[OPTIMIZER] AdamW momentum and variance secured: " << filepath << std::endl;
+    }
+
+    void AdamW::load_state(const std::string& filepath) {
+        std::ifstream in(filepath, std::ios::binary);
+        if (!in.is_open()) {
+            throw std::runtime_error("CRITICAL: Failed to open optimizer state file for loading.");
+        }
+
+        // 1. Restore the step count
+        in.read(reinterpret_cast<char*>(&step_count), sizeof(int));
+
+        // 2. Load Momentum
+        for (Tensor* m : m_state) {
+            m->load(in);
+            m->to_device(); // Immediately blast the loaded memory back to VRAM
+        }
+
+        // 3. Load Variance
+        for (Tensor* v : v_state) {
+            v->load(in);
+            v->to_device();
+        }
+
+        in.close();
+        std::cout << "[OPTIMIZER] AdamW amnesia cured. Resuming momentum from step " << step_count << std::endl;
+    }
 }

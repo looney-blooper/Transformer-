@@ -18,6 +18,9 @@ namespace data {
 
         // Rewinds the dataset back to the beginning for the next Epoch
         void reset();
+
+        //The Colab recovery mechanism
+        void fast_forward_to_step(int step);
     };
 
 }

@@ -30,6 +30,10 @@ namespace core {
 
         //Zeros out the d_grads before moving to next step; 
         void zero_grad();
+
+        //Serialization for checkpointing
+        void save_state(const std::string& filepath);
+        void load_state(const std::string& filepath);
     
     };
 }
