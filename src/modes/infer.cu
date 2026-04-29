@@ -2,6 +2,7 @@
 #include <string>
 #include "../model/gpt.cuh"
 #include "../data/tokenizer.h"
+#include "../config/config.h"
 
 
 // --- Helper: Decoding Sampler ---
@@ -27,13 +28,14 @@ void run_infer(int argc, char** argv) {
     std::string seed_text = (argc >= 3) ? argv[2] : "The";
 
     // Ensure hyperparams match training!
-    int target_vocab_size = 300;
-    int d_model = 64;
-    int num_heads = 4;
-    int d_ff = 256;
-    int num_layers = 2;
-    int max_seq_len = 128;
-    int batch_size = 1;
+    config::CONFIG hyper_parameters;
+    int target_vocab_size = hyper_parameters.vocab_size;
+    int d_model = hyper_parameters.d_model;
+    int num_heads = hyper_parameters.num_heads;
+    int d_ff = hyper_parameters.d_ff;
+    int num_layers = hyper_parameters.num_layers;
+    int max_seq_len = hyper_parameters.max_seq_len;
+    int batch_size = hyper_parameters.train_batch_size;
 
     model::GPT gpt(target_vocab_size, d_model, num_heads, d_ff, num_layers, max_seq_len, batch_size);
     data::BPETokenizer tokenizer(target_vocab_size);

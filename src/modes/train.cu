@@ -11,6 +11,7 @@
 #include "../data/dataloader.h"
 #include "../core/checkpoint.cuh"
 #include "../core/optimizer.cuh"
+#include "../config/config.h"
 
 
 std::string read_file(const std::string& filepath) {
@@ -48,12 +49,18 @@ void run_train(int argc, char** argv) {
     std::cout << ">>> C++ TRANSFORMER ENGINE: TRAINING MODE <<<" << std::endl;
     std::cout << "==================================================\n" << std::endl;
 
+    
     // Hyperparameters
-    int target_vocab_size = 300;
-    int d_model = 64, num_heads = 4, d_ff = 256, num_layers = 2;
-    int max_seq_len = 128, batch_size = 1;
-    int epochs = 150;
-    int save_every_n_steps = 500; // Save backup every 500 batches
+    config::CONFIG hyper_parameters;
+    int target_vocab_size = hyper_parameters.vocab_size;
+    int d_model = hyper_parameters.d_model;
+    int num_heads = hyper_parameters.num_heads;
+    int d_ff = hyper_parameters.d_ff;
+    int num_layers = hyper_parameters.num_layers;
+    int max_seq_len = hyper_parameters.max_seq_len;
+    int batch_size = hyper_parameters.train_batch_size;
+    int epochs = hyper_parameters.epochs;
+    int save_every_n_steps = hyper_parameters.save_every_n_steps; // Save backup every 500 batches
 
     model::GPT gpt(target_vocab_size, d_model, num_heads, d_ff, num_layers, max_seq_len, batch_size);
     gpt.print_model_summary();
