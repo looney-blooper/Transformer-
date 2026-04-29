@@ -1,7 +1,7 @@
 #include <iostream>
 #include "../model/gpt.cuh"
 
-void run_compress() {
+void run_compress(int argc, char** argv) {
     std::cout << "\n==================================================" << std::endl;
     std::cout << ">>> C++ TRANSFORMER ENGINE: INT8 QUANTIZATION <<<" << std::endl;
     std::cout << "==================================================\n" << std::endl;

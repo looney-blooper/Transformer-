@@ -43,7 +43,7 @@ void initialize_model_weights(model::GPT& gpt) {
     gpt.final_ln->gamma->to_device(); gpt.final_ln->beta->to_device();
 }
 
-void run_train() {
+void run_train(int argc, char** argv) {
     std::cout << "\n==================================================" << std::endl;
     std::cout << ">>> C++ TRANSFORMER ENGINE: TRAINING MODE <<<" << std::endl;
     std::cout << "==================================================\n" << std::endl;
