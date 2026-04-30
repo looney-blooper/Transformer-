@@ -1,4 +1,5 @@
 #include "gpt.cuh"
+#include "../config/config.h"
 #include <iostream>
 #include <fstream>
 #include <iomanip>
@@ -207,22 +208,73 @@ namespace model {
     }
 
     void model::GPT::print_model_summary() {
-        size_t total_params = get_parameter_count();
-        float memory_mb = (float)(total_params * sizeof(float)) / (1024.0f * 1024.0f);
+        size_t actual_total = get_parameter_count();
+        float memory_mb = (float)(actual_total * sizeof(float)) / (1024.0f * 1024.0f);
 
-        std::cout << "\n==================================================" << std::endl;
-        std::cout << "             MODEL ARCHITECTURE SUMMARY           " << std::endl;
-        std::cout << "==================================================" << std::endl;
-        std::cout << std::left << std::setw(20) << "Vocab Size:" << vocab_size << std::endl;
-        std::cout << std::left << std::setw(20) << "Context Window:" << max_seq_len << " tokens" << std::endl;
-        std::cout << std::left << std::setw(20) << "Embedding Dim:" << d_model << std::endl;
-        std::cout << std::left << std::setw(20) << "Attention Heads:" << num_heads << std::endl;
-        std::cout << std::left << std::setw(20) << "FeedForward Dim:" << d_ff << std::endl;
-        std::cout << std::left << std::setw(20) << "Transformer Layers:" << num_layers << std::endl;
-        std::cout << "--------------------------------------------------" << std::endl;
-        std::cout << std::left << std::setw(20) << "Total Parameters:" << total_params << std::endl;
-        std::cout << std::left << std::setw(20) << "Physical Size:" << std::fixed << std::setprecision(2) << memory_mb << " MB (FP32)" << std::endl;
-        std::cout << "==================================================\n" << std::endl;
+        config::CONFIG hyper_parameters;
+        int vocab_size = hyper_parameters.vocab_size;
+        int d_model = hyper_parameters.d_model;
+        int num_heads = hyper_parameters.num_heads;
+        int d_ff = hyper_parameters.d_ff;
+        int num_layers = hyper_parameters.num_layers;
+        int max_seq_len = hyper_parameters.max_seq_len;
+
+        // 2. Calculate the Analytical Breakdown
+        size_t token_emb = vocab_size * d_model;
+        size_t pos_emb = max_seq_len * d_model;
+        size_t embed_params = token_emb + pos_emb;
+        
+        // Attention: Wqkv (3 * d_model^2 + 3d_model) + Wo (d_model^2 + d_model)
+        size_t single_attn = 4 * (d_model * d_model) + 4 * d_model;
+        size_t attn_params = single_attn * num_layers;
+
+        // FeedForward: W1 (d_model * d_ff + d_ff) + W2 (d_ff * d_model + d_model)
+        size_t single_ff = 2 * (d_model * d_ff) + d_ff + d_model;
+        size_t ff_params = single_ff * num_layers;
+
+        // LayerNorm: 2 per block (gamma+beta), 1 final at the end
+        size_t single_ln = 2 * d_model;
+        size_t ln_params = (single_ln * 2 * num_layers) + single_ln;
+
+        // 3. Catch any discrepancies (like an untied LM Head)
+        size_t accounted_params = embed_params + attn_params + ff_params + ln_params;
+        size_t untied_lm_head = (actual_total > accounted_params) ? (actual_total - accounted_params) : 0;
+
+        // 4. Render the Table
+        std::cout << "\n=================================================================" << std::endl;
+        std::cout << "                  MODEL ARCHITECTURE SUMMARY                   " << std::endl;
+        std::cout << "=================================================================" << std::endl;
+        std::cout << std::left << std::setw(20) << "Vocab Size:" << vocab_size << "\n";
+        std::cout << std::left << std::setw(20) << "Context Window:" << max_seq_len << " tokens\n";
+        std::cout << std::left << std::setw(20) << "Embedding Dim:" << d_model << "\n";
+        std::cout << std::left << std::setw(20) << "Attention Heads:" << num_heads << "\n";
+        std::cout << std::left << std::setw(20) << "FeedForward Dim:" << d_ff << "\n";
+        std::cout << std::left << std::setw(20) << "Transformer Layers:" << num_layers << "\n";
+        std::cout << "-----------------------------------------------------------------" << std::endl;
+        
+        std::cout << std::left << std::setw(35) << "MODULE" << std::setw(15) << "PARAMETERS" << "% OF TOTAL\n";
+        std::cout << "-----------------------------------------------------------------" << std::endl;
+        
+        // Helper lambda to print rows cleanly
+        auto print_row = [&](const std::string& name, size_t count) {
+            if (count == 0) return; // Skip empty modules
+            float pct = (float)count / actual_total * 100.0f;
+            std::cout << std::left << std::setw(35) << name 
+                    << std::setw(15) << count 
+                    << std::fixed << std::setprecision(2) << pct << "%\n";
+        };
+
+        print_row("Embeddings (Token + Positional)", embed_params);
+        print_row("Multi-Head Attention", attn_params);
+        print_row("Feed Forward Network", ff_params);
+        print_row("Layer Normalization", ln_params);
+        print_row("LM Head (Untied) / Other", untied_lm_head);
+        
+        std::cout << "-----------------------------------------------------------------" << std::endl;
+        std::cout << std::left << std::setw(35) << "TOTAL PARAMETERS" << std::setw(15) << actual_total << "100.00%\n";
+        std::cout << "-----------------------------------------------------------------" << std::endl;
+        std::cout << std::left << std::setw(35) << "PHYSICAL RAM SIZE" << memory_mb << " MB (FP32)\n";
+        std::cout << "=================================================================\n" << std::endl;
     }
 
     void model::GPT::save_int8(const std::string& filepath) {
