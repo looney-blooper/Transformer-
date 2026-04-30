@@ -44,6 +44,21 @@ void initialize_model_weights(model::GPT& gpt) {
     gpt.final_ln->gamma->to_device(); gpt.final_ln->beta->to_device();
 }
 
+__global__ void scale_tensor_kernel(float* d_data, int size, float scale) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < size) {
+        d_data[idx] *= scale;
+    }
+}
+
+// Host wrapper to call the kernel cleanly
+void scale_tensor_gpu(float* d_data, int size, float scale) {
+    int threads = 256;
+    int blocks = (size + threads - 1) / threads;
+    scale_tensor_kernel<<<blocks, threads>>>(d_data, size, scale);
+}
+
+
 void run_train(int argc, char** argv) {
     std::cout << "\n==================================================" << std::endl;
     std::cout << ">>> C++ TRANSFORMER ENGINE: TRAINING MODE <<<" << std::endl;
@@ -61,6 +76,7 @@ void run_train(int argc, char** argv) {
     int batch_size = hyper_parameters.train_batch_size;
     int epochs = hyper_parameters.epochs;
     int save_every_n_steps = hyper_parameters.save_every_n_steps; // Save backup every 500 batches
+    int gradient_accumulation_steps = hyper_parameters.gradient_accumulation_steps;
 
     model::GPT gpt(target_vocab_size, d_model, num_heads, d_ff, num_layers, max_seq_len, batch_size);
     gpt.print_model_summary();
@@ -116,22 +132,37 @@ void run_train(int argc, char** argv) {
         int batch_count = 0;
 
         while (dataloader.get_next_batch(d_X, d_Y)) {
-            optimizer.zero_grad();
+            // 1. Forward Pass
             gpt.forward(d_X, &Logits);
             
-            float loss = criterion.forward_backward(&Logits, d_Y, &dLogits);
+            // 2. Calculate the raw loss for telemetry
+            float raw_loss = criterion.forward_backward(&Logits, d_Y, &dLogits);
             
-            gpt.backward(&dLogits);
-            optimizer.step();
-            cudaDeviceSynchronize();
+            // 3. SCALE THE GRADIENTS (CRITICAL)
+            // If you don't scale dLogits down by 32, accumulating 32 gradients will cause an Infinity/NaN explosion!
+            // Note: You will need to implement a simple CUDA kernel or CPU loop to multiply dLogits.d_data by (1.0f / cfg.gradient_accumulation_steps) here.
+            float scale_factor = 1.0f / gradient_accumulation_steps;
+            scale_tensor_gpu(dLogits.d_data, dLogits.size, scale_factor); 
 
-            epoch_loss += loss;
+            // 4. Backward Pass (Accumulates gradients into memory without updating weights)
+            gpt.backward(&dLogits);
+            
+            epoch_loss += raw_loss;
             step++;
             batch_count++;
 
+            // 5. THE ACCUMULATION TRIGGER
+            if (step % gradient_accumulation_steps == 0) {
+                // We have now collected 32 sequences worth of gradients. 
+                // Now we finally step the optimizer and clear the buffer!
+                optimizer.step();
+                optimizer.zero_grad();
+                cudaDeviceSynchronize();
+            }
+
             // --> TRIGGER THE BACKUP CHECKPOINT
             if (step % save_every_n_steps == 0) {
-                checkpointer.save_checkpoint(gpt, optimizer, epoch, step, loss, optimizer.lr);
+                checkpointer.save_checkpoint(gpt, optimizer, epoch, step, raw_loss, optimizer.lr);
             }
         }
 
