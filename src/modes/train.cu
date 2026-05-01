@@ -79,11 +79,17 @@ void run_train(int argc, char** argv) {
     int save_every_n_steps = hyper_parameters.save_every_n_steps; // Save backup every 500 batches
     int gradient_accumulation_steps = hyper_parameters.gradient_accumulation_steps;
 
+    float lr = hyper_parameters.lr;
+    float beta1 = hyper_parameters.beta1;
+    float beta2 = hyper_parameters.beta2;
+    float weight_decay = hyper_parameters.weight_decay;
+
+
     model::GPT gpt(target_vocab_size, d_model, num_heads, d_ff, num_layers, max_seq_len, batch_size);
     gpt.print_model_summary();
 
     layers::CrossEntropyLoss criterion;
-    core::AdamW optimizer(gpt.parameters(), 0.001f, 0.9f, 0.999f, 0.01f);
+    core::AdamW optimizer(gpt.parameters(), lr, beta1, beta2, weight_decay);
 
     std::cout << "\n[ INITIALIZING RANDOM WEIGHTS ]\n" << std::endl;
     initialize_model_weights(gpt);
