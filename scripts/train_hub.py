@@ -40,11 +40,11 @@ def main():
     
     # 2. Compile Engine
     print("\n[ COMPILING C++ ENGINE ]")
-    run_cmd(COMPILE_CMD, use_shell=True)
+    run_cmd(COMPILE_CMD)
 
     # 3. Train
     print("\n[ IGNITING TRAINING LOOP ]")
-    run_cmd(["./gpt_engine", "train"], use_shell=False)
+    run_cmd(["./gpt_engine", "train"])
 
     # 4. Generate the Loss Graph
     print("\n[ GENERATING TELEMETRY GRAPH ]")
