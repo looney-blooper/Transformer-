@@ -122,65 +122,40 @@ void run_train(int argc, char** argv) {
 
     gpt.disable_kv_cache();
 
-    // 4. The Master Training Loop
-    for (int epoch = start_epoch; epoch <= epochs; epoch++) {
-        
-        // If resuming, pick up where we left off. Otherwise, start at 0.
-        int step = (epoch == start_epoch) ? start_step : 0; 
-        
-        float epoch_loss = 0.0f;
-        int batch_count = 0;
+    std::cout << "\n==================================================" << std::endl;
+    std::cout << ">>> PRE-FLIGHT CHECK: OVERFITTING SINGLE BATCH <<<" << std::endl;
+    std::cout << "==================================================\n" << std::endl;
 
-        while (dataloader.get_next_batch(d_X, d_Y)) {
-            // 1. Forward Pass
-            gpt.forward(d_X, &Logits);
-            
-            // 2. Calculate the raw loss for telemetry
-            float raw_loss = criterion.forward_backward(&Logits, d_Y, &dLogits);
-            
-            // 3. SCALE THE GRADIENTS (CRITICAL)
-            // If you don't scale dLogits down by 32, accumulating 32 gradients will cause an Infinity/NaN explosion!
-            // Note: You will need to implement a simple CUDA kernel or CPU loop to multiply dLogits.d_data by (1.0f / cfg.gradient_accumulation_steps) here.
-            float scale_factor = 1.0f / gradient_accumulation_steps;
-            scale_tensor_gpu(dLogits.d_data, dLogits.size, scale_factor); 
-
-            // 4. Backward Pass (Accumulates gradients into memory without updating weights)
-            gpt.backward(&dLogits);
-            
-            epoch_loss += raw_loss;
-            step++;
-            batch_count++;
-
-            // 5. THE ACCUMULATION TRIGGER
-            if (step % gradient_accumulation_steps == 0) {
-                // We have now collected 32 sequences worth of gradients. 
-                // Now we finally step the optimizer and clear the buffer!
-                optimizer.step();
-                optimizer.zero_grad();
-                cudaDeviceSynchronize();
-            }
-
-            // --> TRIGGER THE BACKUP CHECKPOINT
-            if (step % save_every_n_steps == 0) {
-                checkpointer.save_checkpoint(gpt, optimizer, epoch, step, raw_loss, optimizer.lr);
-            }
-        }
-
-        // Epoch Complete
-        float avg_loss = epoch_loss / batch_count;
-        std::cout << "Epoch " << epoch << "/" << epochs << " | Avg Loss: " << std::fixed << std::setprecision(5) << avg_loss << std::endl;
-        
-        // Let the checkpointer handle telemetry safely
-        checkpointer.log_telemetry(epoch, step, avg_loss, optimizer.lr);
-
-        // --> RESET THE DATALOADER FOR THE NEXT EPOCH
-        dataloader.reset(); 
+    // 1. Fetch exactly ONE batch
+    if (!dataloader.get_next_batch(d_X, d_Y)) {
+        std::cerr << "Failed to fetch test batch!" << std::endl;
+        return;
     }
 
-    // 5. Final Artifact Extraction
-    std::cout << "\n[ TRAINING COMPLETE. EXTRACTING BRAIN... ]\n" << std::endl;
-    gpt.save_pretrained("gpt2_weights.bin");
+    // 2. Force the engine to memorize it
+    int test_steps = 250;
+    for (int step = 1; step <= test_steps; step++) {
+        
+        optimizer.zero_grad();
+        
+        gpt.forward(d_X, &Logits);
+        float loss = criterion.forward_backward(&Logits, d_Y, &dLogits);
+        
+        gpt.backward(&dLogits);
+        optimizer.step();
+        cudaDeviceSynchronize();
 
+        // Print every 10 steps so we can watch the math stabilize
+        if (step % 10 == 0 || step == 1) {
+            std::cout << "Step " << step << "/" << test_steps 
+                      << " | Loss: " << std::fixed << std::setprecision(5) << loss << std::endl;
+        }
+    }
+
+    std::cout << "\n[ PRE-FLIGHT COMPLETE. DO NOT USE THESE WEIGHTS. ]\n" << std::endl;
+    
+    // --> Do NOT save these weights! They are garbage and only know one sentence.
+    
     cudaFree(d_X); 
     cudaFree(d_Y);
 }

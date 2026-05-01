@@ -13,8 +13,8 @@ namespace config {
 
         // 2. Training Hyperparameters
         int train_batch_size = 32; // Low memory footprint
-        int gradient_accumulation_steps = 4;
-        int epochs = 10;           // Fast convergence over smaller datasets
+        int gradient_accumulation_steps = 1;
+        int epochs = 1;           // Fast convergence over smaller datasets
         int save_every_n_steps = 100;
 
         // 3. Optimizer Hyperparameters
