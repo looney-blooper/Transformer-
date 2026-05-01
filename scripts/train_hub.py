@@ -16,11 +16,18 @@ HF_REPO_ID = "mithun017/cpp-transformer-weights"
 HF_TOKEN = os.getenv("HF_TOKEN")
 
 # Using the wildcard approach prevents the "missing comma" concatenation bug
-COMPILE_CMD = "nvcc -O3 main.cu src/core/*.cu src/model/*.cu src/layers/*.cu src/modes/*.cu src/data/*.cpp -lcublas -o gpt_engine"
+COMPILE_CMD = ["nvcc", "-O3",
+               "src/main.cu",
+               "src/core/ops.cu","src/core/optimizer.cu","src/core/checkpoint.cu"
+               "src/model/gpt.cu","src/model/transformer.cu", 
+               "src/layers/attention.cu","src/layers/loss.cu","src/layers/modules.cu", 
+               "src/data/tokenizer.cpp", "src/data/dataloader.cpp",
+               "src/modes/train.cu","src/modes/infer.cu","src/modes/compress.cu", "src/modes/get_model_summary.cu",
+               "-lcublas", "-o", "gpt_engine"]
 
-def run_cmd(cmd, use_shell=False):
-    print(f"\n>>> Executing: {cmd if isinstance(cmd, str) else ' '.join(cmd)}")
-    subprocess.run(cmd, check=True, shell=use_shell)
+def run_cmd(cmd):
+    print(f"\n>>> Executing: {' '.join(cmd)}")
+    subprocess.run(cmd, check=True)
 
 def main():
     # 1. Download Dataset (Skips if you already have the massive input.txt)
@@ -76,7 +83,7 @@ def main():
         except Exception as e:
             print("No existing checkpoints found in the cloud (or error syncing). Starting fresh.")
 
-            
+
         print("\n[ PUSHING ARTIFACTS TO HUGGING FACE ]")
         try:
             api = HfApi()
