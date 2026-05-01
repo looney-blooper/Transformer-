@@ -13,7 +13,7 @@ HF_TOKEN = os.getenv("HF_TOKEN") # Pull securely from environment variables
 
 COMPILE_CMD = ["nvcc", "-O3",
                "src/main.cu",
-               "src/core/ops.cu","src/core/optimizer.cu",
+               "src/core/ops.cu","src/core/optimizer.cu","src/core/checkpoint.cu"
                "src/model/gpt.cu","src/model/transformer.cu", 
                "src/layers/attention.cu","src/layers/loss.cu","src/layers/modules.cu", 
                "src/data/tokenizer.cpp", "src/data/dataloader.cpp",

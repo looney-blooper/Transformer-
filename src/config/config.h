@@ -4,12 +4,12 @@ namespace config {
     struct CONFIG {
         
         // 1. Architecture Hyperparameters (GPT-Nano) -- 8M params
-        int vocab_size = 10000;    // Compact vocabulary (e.g., specific character or small BPE)
+        int vocab_size = 100;    // Compact vocabulary (e.g., specific character or small BPE)
         int d_model = 256;         // Hidden dimension
         int num_heads = 4;         // Attention heads
         int d_ff = 1024;           // Feed-forward dimension (d_model * 4)
         int num_layers = 4;        // Transformer blocks
-        int max_seq_len = 512;     // Context window length
+        int max_seq_len = 16;     // Context window length
 
         // 2. Training Hyperparameters
         int train_batch_size = 32; // Low memory footprint
