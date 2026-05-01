@@ -12,7 +12,6 @@ __global__ void adamw_kernel(float* W, float* grad, float* m, float* v,
                              int step, int total_elements) {
     
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
-
     if (idx < total_elements) {
         float g = grad[idx];
         float weight = W[idx];

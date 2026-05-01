@@ -3,21 +3,26 @@
 namespace config {
     struct CONFIG {
         
-        // 1. Architecture Hyperparameters (GPT-Nano) -- 8M params
-    // Hyperparameters
-        int vocab_size = 300; 
-        int max_seq_len = 128;
-        int d_model = 64;
-        int num_heads = 4;
-        int d_ff = 256;
-        int num_layers = 2;
-        int epochs = 1;
-        float learning_rate = 0.006f;
-        int train_batch_size = 1;
-        int gradient_accumulation_steps = 1;
+         // 1. Architecture Hyperparameters (GPT-Nano) -- 8M params
+        int vocab_size = 10000;    // Compact vocabulary (e.g., specific character or small BPE)
+        int d_model = 256;         // Hidden dimension
+        int num_heads = 4;         // Attention heads
+        int d_ff = 1024;           // Feed-forward dimension (d_model * 4)
+        int num_layers = 4;        // Transformer blocks
+        int max_seq_len = 512;     // Context window length
+
+        // 2. Training Hyperparameters
+        int train_batch_size = 32; // Low memory footprint
+        int gradient_accumulation_steps = 4;
+        int epochs = 10;           // Fast convergence over smaller datasets
+        int save_every_n_steps = 100;
+
+        // 3. Optimizer Hyperparameters
+        float lr = 0.001f;         // Standard learning rate
         float beta1 = 0.9f;
-        float beta2 = 0.98f;       // Adjusted beta2 for stability
-        float weight_decay = 0.1f;
+        float beta2 = 0.999f;
+        float weight_decay = 0.01f;
+        
         
         /*
         // 1. Architecture Hyperparameters (GPT-Mini) -- 36M params

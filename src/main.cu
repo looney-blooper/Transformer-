@@ -1,5 +1,6 @@
 #include <iostream>
 #include <string>
+#include "core/ops.cuh"
 
 // Update the forward declarations to accept the arguments
 void run_train(int argc, char** argv);
@@ -12,6 +13,8 @@ int main(int argc, char** argv) {
         std::cerr << "Usage: ./gpt_engine [train|infer|compress] [additional_args]" << std::endl;
         return 1;
     }
+
+    ops::init_cublas();
 
     std::string mode = argv[1];
 
@@ -27,8 +30,10 @@ int main(int argc, char** argv) {
     } else {
         std::cerr << "CRITICAL ERROR: Unknown mode '" << mode << "'." << std::endl;
         std::cerr << "Available modes: train, infer, compress" << std::endl;
+        ops::destroy_cublas();
         return 1;
     }
-
+    
+    ops::destroy_cublas();
     return 0;
 }

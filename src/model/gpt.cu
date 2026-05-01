@@ -141,8 +141,8 @@ namespace model {
         }
 
         // 3. Final Output Layers
-        params.push_back(final_ln->gamma);
-        params.push_back(final_ln->beta);
+        //params.push_back(final_ln->gamma);
+        //params.push_back(final_ln->beta);
         params.push_back(lm_head->W);
         params.push_back(lm_head->b);
 
