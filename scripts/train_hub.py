@@ -13,7 +13,7 @@ from huggingface_hub import HfApi, snapshot_download
 DATA_URL = "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt" 
 HF_REPO_ID = "mithun017/cpp-transformer-weights" 
 HF_TOKEN = os.getenv("HF_TOKEN")
-SYNC_INTERVAL_SECONDS = 120  # Wakes up every 2 minutes to backup to HF
+SYNC_INTERVAL_SECONDS = 300  # Wakes up every 5 minutes to backup to HF
 
 COMPILE_CMD = ["nvcc", "-O3",
                "src/main.cu",
@@ -51,6 +51,7 @@ def background_cloud_sync():
                         path_or_fileobj=file, path_in_repo=file,
                         repo_id=HF_REPO_ID, repo_type="model", token=HF_TOKEN
                     )
+                    print(f"Downloaded file : {file}")
             
             # 2. Sync Checkpoints Folder
             if os.path.exists("checkpoints") and os.path.isdir("checkpoints"):

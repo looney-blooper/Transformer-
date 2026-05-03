@@ -103,9 +103,11 @@ void run_train(int argc, char** argv) {
     // 1. Recover State OR Start Fresh
     bool is_resuming = checkpointer.load_latest(gpt, optimizer, start_epoch, start_step);
 
-    if (is_resuming) {
-        std::cout << "--> Loading existing BPE Vocabulary..." << std::endl;
+    std::ifstream vfile("vocab.bin");
+    if (vfile.is_open()) {
+        std::cout << "--> Existing BPE Vocabulary detected. Loading 'vocab.bin'..." << std::endl;
         tokenizer.load("vocab.bin");
+        vfile.close();
     } else {
         std::cout << "--> Training new BPE Tokenizer..." << std::endl;
         tokenizer.train(text);
