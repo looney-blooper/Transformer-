@@ -98,29 +98,40 @@ void run_train(int argc, char** argv) {
     CheckpointManagerNS::checkpointManager checkpointer("checkpoints");
 
     int start_epoch = 1, start_step = 0;
-    std::string text = read_file("input.txt");
 
     // 1. Recover State OR Start Fresh
     bool is_resuming = checkpointer.load_latest(gpt, optimizer, start_epoch, start_step);
 
+    std::cout << "\n[PING 1] Reading input.txt into CPU RAM..." << std::endl;
+    std::string text = read_file("input.txt");
+    std::cout << "         -> File size: " << text.length() / (1024 * 1024) << " MB" << std::endl;
+
+    std::cout << "[PING 2] Checking for vocab.bin..." << std::endl;
     std::ifstream vfile("vocab.bin");
     if (vfile.is_open()) {
-        std::cout << "--> Existing BPE Vocabulary detected. Loading 'vocab.bin'..." << std::endl;
+        std::cout << "         -> Found it! Loading vocabulary..." << std::endl;
         tokenizer.load("vocab.bin");
         vfile.close();
     } else {
-        std::cout << "--> Training new BPE Tokenizer..." << std::endl;
+        std::cout << "         -> Not found! Training new BPE Tokenizer (THIS IS VERY SLOW)..." << std::endl;
         tokenizer.train(text);
         tokenizer.save("vocab.bin");
     }
 
-    // 2. Setup Dataloader
+    std::cout << "[PING 3] Encoding entire dataset into integer tokens..." << std::endl;
+    std::cout << "         -> (If it freezes here, your BPE encode() function is too slow for this file size)" << std::endl;
     std::vector<int> tokens = tokenizer.encode(text);
+    std::cout << "         -> Total Tokens: " << tokens.size() << std::endl;
+
+    std::cout << "[PING 4] Initializing DataLoader..." << std::endl;
     data::DataLoader dataloader(tokens, batch_size, max_seq_len);
 
     if (is_resuming) {
+        std::cout << "[PING 5] Fast-forwarding DataLoader to Step " << start_step << "..." << std::endl;
         dataloader.fast_forward_to_step(start_step);
     }
+
+    std::cout << "[PING 6] Allocating GPU VRAM and entering training loop..." << std::endl;
 
     // 3. VRAM Allocation
     int *d_X, *d_Y;
