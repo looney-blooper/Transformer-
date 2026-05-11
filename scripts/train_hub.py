@@ -21,7 +21,7 @@ COMPILE_CMD = ["nvcc", "-O3",
                "src/model/gpt.cu","src/model/transformer.cu", 
                "src/layers/attention.cu","src/layers/loss.cu","src/layers/modules.cu", 
                "src/data/tokenizer.cpp", "src/data/dataloader.cpp",
-               "src/modes/train.cu","src/modes/infer.cu","src/modes/compress.cu", "src/modes/get_model_summary.cu",
+               "src/modes/train.cu","src/modes/infer.cu","src/modes/compress.cu", "src/modes/get_model_summary.cu","src/modes/preprocess.cu",
                "-lcublas", "-o", "gpt_engine"]
 
 training_is_running = False
