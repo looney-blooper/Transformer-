@@ -91,6 +91,13 @@ def main():
     print("\n[ COMPILING C++ ENGINE ]")
     run_cmd(COMPILE_CMD)
 
+    # 2.5 Run Binary Data Pipeline (Only if needed)
+    if not os.path.exists("dataset.bin"):
+        print("\n[ RUNNING DATA PIPELINE ] Compressing text to binary integers...")
+        run_cmd(["./gpt_engine", "preprocess"])
+    else:
+        print("\n[ PIPELINE SKIPPED ] dataset.bin already exists.")
+
     # 3. Ignite Training & Background Sync Thread
     print("\n[ IGNITING TRAINING LOOP & TELEMETRY THREAD ]")
     

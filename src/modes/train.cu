@@ -102,36 +102,38 @@ void run_train(int argc, char** argv) {
     // 1. Recover State OR Start Fresh
     bool is_resuming = checkpointer.load_latest(gpt, optimizer, start_epoch, start_step);
 
-    std::cout << "\n[PING 1] Reading input.txt into CPU RAM..." << std::endl;
-    std::string text = read_file("input.txt");
-    std::cout << "         -> File size: " << text.length() / (1024 * 1024) << " MB" << std::endl;
-
-    std::cout << "[PING 2] Checking for vocab.bin..." << std::endl;
-    std::ifstream vfile("vocab.bin");
-    if (vfile.is_open()) {
-        std::cout << "         -> Found it! Loading vocabulary..." << std::endl;
-        tokenizer.load("vocab.bin");
-        vfile.close();
-    } else {
-        std::cout << "         -> Not found! Training new BPE Tokenizer (THIS IS VERY SLOW)..." << std::endl;
-        tokenizer.train(text);
-        tokenizer.save("vocab.bin");
+    // ---------------------------------------------------------
+    // THE BINARY DATA LOADER
+    // ---------------------------------------------------------
+    std::cout << "\n[ DATA IO ] Loading pre-compiled dataset.bin into RAM..." << std::endl;
+    
+    // Open the file and immediately jump to the end (ios::ate) to check the size
+    std::ifstream bin_file("dataset.bin", std::ios::binary | std::ios::ate);
+    if (!bin_file.is_open()) {
+        std::cerr << "CRITICAL: dataset.bin not found! Run './gpt_engine preprocess' first." << std::endl;
+        exit(1);
     }
+    
+    size_t file_size = bin_file.tellg();
+    bin_file.seekg(0, std::ios::beg); // Jump back to the start
 
-    std::cout << "[PING 3] Encoding entire dataset into integer tokens..." << std::endl;
-    std::cout << "         -> (If it freezes here, your BPE encode() function is too slow for this file size)" << std::endl;
-    std::vector<int> tokens = tokenizer.encode(text);
-    std::cout << "         -> Total Tokens: " << tokens.size() << std::endl;
+    // Calculate how many integers are in the file
+    size_t num_tokens = file_size / sizeof(int);
+    std::vector<int> tokens(num_tokens);
 
-    std::cout << "[PING 4] Initializing DataLoader..." << std::endl;
+    // Blast the entire file straight into the vector's memory in one shot
+    bin_file.read(reinterpret_cast<char*>(tokens.data()), file_size);
+    bin_file.close();
+
+    std::cout << "            -> Loaded " << num_tokens << " tokens in milliseconds." << std::endl;
+
+    std::cout << "[ DATA IO ] Initializing DataLoader..." << std::endl;
     data::DataLoader dataloader(tokens, batch_size, max_seq_len);
 
     if (is_resuming) {
-        std::cout << "[PING 5] Fast-forwarding DataLoader to Step " << start_step << "..." << std::endl;
         dataloader.fast_forward_to_step(start_step);
     }
-
-    std::cout << "[PING 6] Allocating GPU VRAM and entering training loop..." << std::endl;
+    // ---------------------------------------------------------
 
     // 3. VRAM Allocation
     int *d_X, *d_Y;
