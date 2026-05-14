@@ -30,46 +30,32 @@ void run_preprocess() {
         exit(1);
     }
 
-    std::cout << "[3] Encoding via Line-Batches to defeat O(N^2) complexity..." << std::endl;
+    std::cout << "[3] Encoding line-by-line to completely eliminate memory shifting..." << std::endl;
 
     std::string line;
-    std::string batch = "";
-    
-    // 50 KB micro-batches (Fast enough for CPU, large enough for I/O efficiency)
-    const size_t BATCH_LIMIT = 50 * 1024; 
-    
     size_t total_tokens = 0;
-    size_t bytes_processed = 0;
-    int batch_count = 0;
+    size_t lines_processed = 0;
 
-    // Read line-by-line to prevent slicing words in half!
+    // Read strictly line-by-line. 'N' is never larger than ~100 characters!
     while (std::getline(file, line)) {
-        batch += line + "\n";
+        if (line.empty()) continue;
         
-        // When the batch hits 50KB, encode it and clear it
-        if (batch.size() >= BATCH_LIMIT) {
-            std::vector<int> tokens = tokenizer.encode(batch);
-            out.write(reinterpret_cast<const char*>(tokens.data()), tokens.size() * sizeof(int));
-            
-            total_tokens += tokens.size();
-            bytes_processed += batch.size();
-            batch_count++;
-            batch.clear(); // Reset for the next batch
-
-            // Print progress every 10 batches
-            if (batch_count % 10 == 0) {
-                float mb_processed = (float)bytes_processed / (1024.0f * 1024.0f);
-                std::cout << "   -> Processed " << std::fixed << std::setprecision(2) 
-                          << mb_processed << " MB. Total Tokens: " << total_tokens << "\r" << std::flush;
-            }
-        }
-    }
-
-    // Flush whatever is left in the final batch
-    if (!batch.empty()) {
-        std::vector<int> tokens = tokenizer.encode(batch);
+        // Add the newline character back (since getline strips it)
+        line += "\n"; 
+        
+        // Encode this tiny string instantly
+        std::vector<int> tokens = tokenizer.encode(line);
+        
+        // Blast the integers to disk
         out.write(reinterpret_cast<const char*>(tokens.data()), tokens.size() * sizeof(int));
+        
         total_tokens += tokens.size();
+        lines_processed++;
+
+        // Print progress every 10,000 lines so you know it isn't frozen
+        if (lines_processed % 10000 == 0) {
+            std::cout << "   -> Processed " << lines_processed << " lines. Total Tokens: " << total_tokens << "\r" << std::flush;
+        }
     }
 
     file.close();
