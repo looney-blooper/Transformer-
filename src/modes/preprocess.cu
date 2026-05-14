@@ -2,6 +2,7 @@
 #include <fstream>
 #include <vector>
 #include <string>
+#include <iomanip>
 #include "../data/tokenizer.h"
 #include "../config/config.h"
 
@@ -29,35 +30,46 @@ void run_preprocess() {
         exit(1);
     }
 
-    // Chunking parameters (2MB chunks to bypass Big O complexity)
-    const size_t CHUNK_SIZE = 2 * 1024 * 1024;
-    std::string chunk;
-    chunk.resize(CHUNK_SIZE);
+    std::cout << "[3] Encoding via Line-Batches to defeat O(N^2) complexity..." << std::endl;
 
+    std::string line;
+    std::string batch = "";
+    
+    // 50 KB micro-batches (Fast enough for CPU, large enough for I/O efficiency)
+    const size_t BATCH_LIMIT = 50 * 1024; 
+    
     size_t total_tokens = 0;
-    int chunk_count = 0;
+    size_t bytes_processed = 0;
+    int batch_count = 0;
 
-    std::cout << "[3] Encoding in chunks to bypass O(N^2) complexity..." << std::endl;
-    while (file) {
-        file.read(&chunk[0], CHUNK_SIZE);
-        size_t bytes_read = file.gcount();
-        if (bytes_read == 0) break;
+    // Read line-by-line to prevent slicing words in half!
+    while (std::getline(file, line)) {
+        batch += line + "\n";
+        
+        // When the batch hits 50KB, encode it and clear it
+        if (batch.size() >= BATCH_LIMIT) {
+            std::vector<int> tokens = tokenizer.encode(batch);
+            out.write(reinterpret_cast<const char*>(tokens.data()), tokens.size() * sizeof(int));
+            
+            total_tokens += tokens.size();
+            bytes_processed += batch.size();
+            batch_count++;
+            batch.clear(); // Reset for the next batch
 
-        // Trim to actual read size (critical for the final chunk)
-        std::string actual_chunk = chunk.substr(0, bytes_read);
-
-        // Encode just this chunk
-        std::vector<int> tokens = tokenizer.encode(actual_chunk);
-
-        // Write raw integer bytes directly to disk
-        out.write(reinterpret_cast<const char*>(tokens.data()), tokens.size() * sizeof(int));
-
-        total_tokens += tokens.size();
-        chunk_count++;
-
-        if (chunk_count % 5 == 0) {
-            std::cout << "   -> Processed " << (chunk_count * 2) << " MB. Total Tokens: " << total_tokens << "\r" << std::flush;
+            // Print progress every 10 batches
+            if (batch_count % 10 == 0) {
+                float mb_processed = (float)bytes_processed / (1024.0f * 1024.0f);
+                std::cout << "   -> Processed " << std::fixed << std::setprecision(2) 
+                          << mb_processed << " MB. Total Tokens: " << total_tokens << "\r" << std::flush;
+            }
         }
+    }
+
+    // Flush whatever is left in the final batch
+    if (!batch.empty()) {
+        std::vector<int> tokens = tokenizer.encode(batch);
+        out.write(reinterpret_cast<const char*>(tokens.data()), tokens.size() * sizeof(int));
+        total_tokens += tokens.size();
     }
 
     file.close();
